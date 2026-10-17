@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>Visor CAD</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
+  <!-- Lector DXF en navegador. DGN no se interpreta de forma nativa en este HTML. -->
+  <script src="https://cdn.jsdelivr.net/npm/dxf-parser@1.1.2/dist/dxf-parser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/FBXLoader.js"></script>
+  <style>
+    :root { --bg-main:#f8fafc; --bg-panel:#fff; --border-color:#e2e8f0; --text-main:#1e293b; --text-muted:#64748b; --canvas-bg:#f1f5f9; }
+    body.theme-medio { --bg-main:#e2e8f0; --bg-panel:#cbd5e1; --border-color:#94a3b8; --text-main:#0f172a; --text-muted:#475569; --canvas-bg:#cbd5e1; }
+    body.theme-oscuro { --bg-main:#0f172a; --bg-panel:#1e293b; --border-color:#334155; --text-main:#f8fafc; --text-muted:#94a3b8; --canvas-bg:#020617; }
+    body { background:var(--bg-main); color:var(--text-main); }
+    .panel { background:var(--bg-panel); border-color:var(--border-color); }
+    .toolbar-btn { border:1px solid var(--border-color); border-radius:.4rem; padding:.38rem .55rem; font-size:.75rem; white-space:nowrap; }
+    .toolbar-btn:hover { background:rgba(100,116,139,.13); }
+    .toolbar-btn.active { background:#dbeafe; border-color:#60a5fa; color:#1d4ed8; }
+    body.theme-oscuro .toolbar-btn.active { background:#1e3a8a; color:#dbeafe; }
+    #viewport-container { background:var(--canvas-bg); min-width:0; }
+    #canvas-3d, #canvas-2d { position:absolute; inset:0; width:100%; height:100%; }
+    #canvas-3d canvas { display:block; width:100%; height:100%; }
+    #canvas-2d { cursor:crosshair; }
+    .status { font-size:11px; color:var(--text-muted); }
+    .tree-item { padding:.35rem; border-radius:.25rem; }
+    .tree-item:hover { background:rgba(100,116,139,.12); }
+    button:focus-visible, input:focus-visible { outline:2px solid #3b82f6; outline-offset:2px; }
+  </style>
+</head>
+<body class="theme-claro h-screen flex flex-col overflow-hidden text-sm">
+  <header class="panel border-b shrink-0">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+      <div class="flex items-center gap-2 font-bold text-base"><i class="fa-solid fa-cube text-blue-500"></i><span>Visor CAD</span></div>
+      <div class="flex flex-wrap items-center gap-1">
+        <button class="toolbar-btn" id="btn-fit" title="Ajustar todo (A)"><i class="fa-solid fa-expand"></i> Ajustar</button>
+        <button class="toolbar-btn" id="btn-top" title="Vista superior"><i class="fa-solid fa-arrow-down"></i> Superior</button>
+        <button class="toolbar-btn" id="btn-front" title="Vista frontal"><i class="fa-solid fa-square"></i> Frontal</button>
+        <button class="toolbar-btn" id="btn-iso" title="Vista isométrica"><i class="fa-solid fa-cube"></i> Isométrica</button>
+        <button class="toolbar-btn" id="btn-measure" title="Medir: selecciona dos puntos"><i class="fa-solid fa-ruler"></i> Medir</button>
+        <button class="toolbar-btn" id="btn-clear-measures" title="Borrar mediciones"><i class="fa-solid fa-eraser"></i> Borrar medidas</button>
+        <button class="toolbar-btn" id="btn-grid" title="Mostrar/ocultar rejilla"><i class="fa-solid fa-border-all"></i> Rejilla</button>
+        <button class="toolbar-btn" id="btn-cut" title="Activar/desactivar plano de corte"><i class="fa-solid fa-scissors"></i> Corte</button>
+        <label class="text-xs ml-2">Tema
+          <select id="theme-select" class="border rounded px-1 py-1 text-xs" style="background:var(--bg-panel);border-color:var(--border-color)">
+            <option value="claro">Claro</option><option value="medio">Medio</option><option value="oscuro">Oscuro</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div id="tabs-bar" class="hidden flex items-center gap-1 px-3 py-1 border-t overflow-x-auto" style="border-color:var(--border-color)"></div>
+  </header>
+
+  <div class="flex flex-1 min-h-0 overflow-hidden">
+    <aside id="sidebar-left" class="panel border-r w-60 shrink-0 hidden flex-col">
+      <div class="p-3 border-b font-semibold text-xs" style="border-color:var(--border-color)">Capas / entidades</div>
+      <div id="tree-container" class="flex-1 overflow-auto p-2 text-xs"></div>
+    </aside>
+
+    <main id="viewport-container" class="relative flex-1 overflow-hidden">
+      <div id="dropzone" class="absolute inset-0 z-20 flex flex-col items-center justify-center p-6">
+        <div class="text-5xl text-blue-500 mb-4"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+        <h1 class="text-lg font-bold mb-2">Visor CAD</h1>
+        <p class="text-center max-w-xl mb-4 text-sm" style="color:var(--text-muted)">
+          Abre DXF 2D y modelos OBJ, STL, PLY, FBX, GLB o glTF. DGN, DWG, IFC y STEP requieren integrar lectores especializados o conversión.
+        </p>
+        <label class="cursor-pointer px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+          Seleccionar archivo
+          <input type="file" id="file-input" class="hidden" multiple accept=".dxf,.dgn,.dwg,.json,.glb,.gltf,.stl,.obj,.ply,.fbx,.ifc,.step,.stp">
+        </label>
+        <p class="status mt-3 text-center">También puedes arrastrar y soltar. Los archivos se procesan localmente cuando el formato está soportado.</p>
+      </div>
+      <div id="canvas-3d" class="hidden"></div>
+      <canvas id="canvas-2d" class="hidden"></canvas>
+      <div id="tool-status" class="absolute bottom-3 left-3 z-10 rounded px-3 py-2 bg-white/90 text-slate-800 shadow text-xs hidden"></div>
+      <div id="measure-label" class="absolute top-3 left-3 z-10 rounded px-3 py-2 bg-white/90 text-slate-800 shadow text-xs hidden"></div>
+    </main>
+
+    <aside id="sidebar-right" class="panel border-l w-64 shrink-0 hidden flex-col">
+      <div class="p-3 border-b font-semibold text-xs" style="border-color:var(--border-color)">Propiedades</div>
+      <div id="properties-container" class="flex-1 overflow-auto p-3 text-xs space-y-2"></div>
+    </aside>
+  </div>
+  <footer class="panel border-t px-3 py-1 flex items-center justify-between gap-2 shrink-0" style="border-color:var(--border-color)">
+    <span id="status-text" class="status">Listo. Abre un archivo compatible.</span>
+    <span id="coords-text" class="status">X: — Y: — Z: —</span>
+  </footer>
+
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const state = {
+    tabs: [], activeId: null, theme: 'claro', mode: null, dxf: null,
+    scene: null, camera: null, renderer: null, controls: null, animationId: null,
+    object3D: null, grid: null, raycaster: null, pointer: null,
+    measureMode: false, measurePoints: [], measureObjects: [], clippingEnabled: false,
+    clippingPlane: null, currentFile: null, resizeObserver: null
+  };
+
+  function status(message, error = false) {
+    $('status-text').textContent = message;
+    $('status-text').style.color = error ? '#dc2626' : 'var(--text-muted)';
+    $('tool-status').textContent = message;
+    $('tool-status').classList.remove('hidden');
+    clearTimeout(status._timer);
+    status._timer = setTimeout(() => $('tool-status').classList.add('hidden'), 4500);
+  }
+
+  function escapeText(value) { return String(value ?? ''); }
+  function setTheme(theme) {
+    state.theme = theme;
+    document.body.className = `theme-${theme} h-screen flex flex-col overflow-hidden text-sm`;
+    if (state.scene) state.scene.background = new THREE.Color(theme === 'oscuro' ? 0x020617 : theme === 'medio' ? 0xcbd5e1 : 0xf1f5f9);
+    if (state.mode === '2d') draw2D();
+    if (state.renderer && state.scene && state.camera) state.renderer.render(state.scene, state.camera);
+  }
+
+  function fileExt(name) {
+    const i = name.lastIndexOf('.');
+    return i < 0 ? '' : name.slice(i + 1).toLowerCase();
+  }
+  function openFiles(files) {
+    [...files].forEach(file => {
+      const ext = fileExt(file.name);
+      const tab = { id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`, name: file.name, ext, file, mode: null, data: null };
+      state.tabs.push(tab);
+      renderTabs();
+      switchTab(tab.id);
+    });
+  }
+  function renderTabs() {
+    const bar = $('tabs-bar');
+    bar.replaceChildren();
+    bar.classList.toggle('hidden', !state.tabs.length);
+    for (const tab of state.tabs) {
+      const wrap = document.createElement('div');
+      wrap.className = `flex items-center gap-2 px-3 py-1 rounded-t border-t-2 text-xs cursor-pointer ${tab.id === state.activeId ? 'bg-blue-50 border-blue-600 text-blue-900' : 'border-transparent'}`;
+      const name = document.createElement('span');
+      name.textContent = tab.name;
+      name.title = tab.name;
+      const close = document.createElement('button');
+      close.className = 'ml-1 hover:text-red-600';
+      close.textContent = '×';
+      close.title = 'Cerrar archivo';
+      close.addEventListener('click', event => { event.stopPropagation(); closeTab(tab.id); });
+      wrap.addEventListener('click', () => switchTab(tab.id));
+      wrap.append(name, close);
+      bar.append(wrap);
+    }
+  }
+  function switchTab(id) {
+    const tab = state.tabs.find(t => t.id === id);
+    if (!tab) return;
+    state.activeId = id;
+    state.currentFile = tab.file;
+    renderTabs();
+    $('dropzone').classList.add('hidden');
+    $('sidebar-left').classList.remove('hidden');
+    $('sidebar-left').classList.add('flex');
+    $('sidebar-right').classList.remove('hidden');
+    $('sidebar-right').classList.add('flex');
+    resetView();
+    status(`Cargando ${tab.name}…`);
+    loadTab(tab).catch(err => {
+      console.error(err);
+      status(`No se pudo abrir ${tab.name}: ${err.message || err}`, true);
+      showProperties({ Archivo: tab.name, Formato: tab.ext.toUpperCase(), Estado: 'Error de lectura', Detalle: err.message || String(err) });
+    });
+  }
+  function closeTab(id) {
+    const idx = state.tabs.findIndex(t => t.id === id);
+    if (idx < 0) return;
+    const wasActive = state.activeId === id;
+    state.tabs.splice(idx, 1);
+    if (wasActive) {
+      state.activeId = null;
+      resetView();
+      if (state.tabs.length) switchTab(state.tabs[Math.max(0, idx - 1)].id);
+      else {
+        $('dropzone').classList.remove('hidden');
+        $('sidebar-left').classList.add('hidden');
+        $('sidebar-right').classList.add('hidden');
+        $('canvas-2d').classList.add('hidden');
+        $('canvas-3d').classList.add('hidden');
+        $('tree-container').replaceChildren();
+        $('properties-container').replaceChildren();
+        status('Listo. Abre un archivo compatible.');
+      }
+    }
+    renderTabs();
+  }
+  function resetView() {
+    state.measureMode = false; state.measurePoints = []; clearMeasures();
+    $('canvas-2d').classList.add('hidden');
+    $('canvas-3d').classList.add('hidden');
+    $('measure-label').classList.add('hidden');
+    $('btn-measure').classList.remove('active');
+  }
+  async function loadTab(tab) {
+    if (tab.ext === 'dxf') {
+      if (!window.DxfParser) throw new Error('No se ha cargado la biblioteca DXF. Comprueba la conexión o sirve la biblioteca localmente.');
+      const text = await tab.file.text();
+      const parser = new window.DxfParser();
+      const parsed = parser.parseSync(text);
+      if (!parsed || !parsed.entities) throw new Error('El archivo DXF no contiene entidades legibles.');
+      tab.data = parsed; tab.mode = '2d';
+      init2D(tab);
+      populateDxfMetadata(tab);
+      status(`DXF cargado: ${parsed.entities.length} entidades.`);
+      return;
+    }
+    if (['obj','stl','ply','glb','gltf','fbx'].includes(tab.ext)) {
+      await load3DFile(tab);
+      return;
+    }
+    if (['dgn','dwg','ifc','step','stp'].includes(tab.ext)) {
+      const advice = {
+        dgn: 'DGN necesita un lector/conversor especializado compatible con la versión del archivo (V7/V8).',
+        dwg: 'DWG necesita un lector/conversor CAD compatible.',
+        ifc: 'IFC necesita integrar un lector IFC, por ejemplo web-ifc/IFC.js.',
+        step: 'STEP necesita un lector STEP basado en Open CASCADE u otro SDK compatible.',
+        stp: 'STP necesita un lector STEP basado en Open CASCADE u otro SDK compatible.'
+      }[tab.ext];
+      throw new Error(`${advice} Este HTML no puede garantizar la lectura de ese formato sin integrar y configurar ese motor. Para un visor profesional se puede añadir un servicio de conversión o SDK.`);
+    }
+    if (tab.ext === 'json') {
+      const data = JSON.parse(await tab.file.text());
+      throw new Error('JSON recibido, pero no hay un esquema geométrico definido para interpretarlo. Define el formato de datos antes de visualizarlo.');
+    }
+    throw new Error(`Formato .${tab.ext || '(sin extensión)'} no soportado.`);
+  }
+
+  async function load3DFile(tab) {
+    const buffer = await tab.file.arrayBuffer();
+    init3D();
+    state.mode = '3d';
+    const done = object => {
+      if (!object) throw new Error('El lector no ha devuelto geometría.');
+      state.object3D = object;
+      state.scene.add(object);
+      fit3D();
+      const box = new THREE.Box3().setFromObject(object);
+      const size = box.getSize(new THREE.Vector3());
+      $('tree-container').textContent = `Modelo cargado: ${tab.name}`;
+      showProperties({
+        Archivo: tab.name,
+        Formato: tab.ext.toUpperCase(),
+        Estado: 'Geometría cargada',
+        'Extensión X': formatNumber(size.x),
+        'Extensión Y': formatNumber(size.y),
+        'Extensión Z': formatNumber(size.z),
+        Unidades: 'No determinadas automáticamente; verificar en el archivo de origen'
+      });
+      status(`${tab.ext.toUpperCase()} cargado. Verifica unidades, escala y orientación.`);
+    };
+    try {
+      if (tab.ext === 'obj') {
+        const text = new TextDecoder().decode(buffer);
+        done(new THREE.OBJLoader().parse(text));
+      } else if (tab.ext === 'stl') {
+        const geometry = new THREE.STLLoader().parse(buffer);
+        geometry.computeVertexNormals();
+        done(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({color:0x94a3b8, metalness:.1, roughness:.7, side:THREE.DoubleSide})));
+      } else if (tab.ext === 'ply') {
+        const geometry = new THREE.PLYLoader().parse(buffer);
+        geometry.computeVertexNormals();
+        const material = new THREE.MeshStandardMaterial({color:0x94a3b8, vertexColors: !!geometry.getAttribute('color'), side:THREE.DoubleSide});
+        done(new THREE.Mesh(geometry, material));
+      } else if (tab.ext === 'glb' || tab.ext === 'gltf') {
+        const loader = new THREE.GLTFLoader();
+        const basePath = URL.createObjectURL(new Blob([buffer]));
+        loader.parse(buffer, '', gltf => {
+          URL.revokeObjectURL(basePath);
+          done(gltf.scene || gltf.scenes[0]);
+        }, error => {
+          URL.revokeObjectURL(basePath);
+          status(`Error al leer ${tab.name}: ${error.message || error}`, true);
+        });
+      } else if (tab.ext === 'fbx') {
+        done(new THREE.FBXLoader().parse(buffer, ''));
+      }
+    } catch (err) {
+      destroy3D();
+      throw new Error(`No se pudo interpretar el archivo ${tab.ext.toUpperCase()}: ${err.message || err}`);
+    }
+  }
+
+  let canvas2d, ctx2d, view2d = { scale: 1, ox: 0, oy: 0, bounds: null, dragging: false, lastX: 0, lastY: 0, measureStart: null, entities: [] };
+  function init2D(tab) {
+    destroy3D();
+    state.mode = '2d';
+    canvas2d = $('canvas-2d'); ctx2d = canvas2d.getContext('2d');
+    canvas2d.classList.remove('hidden');
+    const bounds = getDxfBounds(tab.data.entities);
+    view2d.entities = tab.data.entities;
+    view2d.bounds = bounds;
+    resize2D();
+    fit2D();
+    canvas2d.onpointerdown = on2DPointerDown;
+    canvas2d.onpointermove = on2DPointerMove;
+    canvas2d.onpointerup = () => { view2d.dragging = false; };
+    canvas2d.onwheel = e => {
+      e.preventDefault();
+      const rect = canvas2d.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const before = screenToWorld(mx, my);
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      view2d.scale = Math.max(1e-5, Math.min(1e7, view2d.scale * factor));
+      const after = worldToScreen(before.x, before.y);
+      view2d.ox += mx - after.x; view2d.oy += my - after.y;
+      draw2D();
+    };
+    new ResizeObserver(resize2D).observe($('viewport-container'));
+  }
+  function resize2D() {
+    if (!canvas2d || state.mode !== '2d') return;
+    const rect = $('viewport-container').getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas2d.width = Math.max(1, Math.floor(rect.width * dpr));
+    canvas2d.height = Math.max(1, Math.floor(rect.height * dpr));
+    canvas2d.style.width = `${rect.width}px`; canvas2d.style.height = `${rect.height}px`;
+    ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw2D();
+  }
+  function getDxfBounds(entities) {
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    const add = p => { if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) { minX=Math.min(minX,p.x); minY=Math.min(minY,p.y); maxX=Math.max(maxX,p.x); maxY=Math.max(maxY,p.y); } };
+    for (const e of entities) {
+      (e.vertices || []).forEach(v => add(v));
+      add(e.startPoint); add(e.endPoint); add(e.center);
+      if (e.position) add(e.position);
+      if (e.controlPoints) e.controlPoints.forEach(add);
+    }
+    if (!Number.isFinite(minX)) return {minX:-10,minY:-10,maxX:10,maxY:10};
+    if (minX === maxX) { minX -= 1; maxX += 1; }
+    if (minY === maxY) { minY -= 1; maxY += 1; }
+    return {minX,minY,maxX,maxY};
+  }
+  function fit2D() {
+    if (!view2d.bounds || !canvas2d) return;
+    const w = $('viewport-container').clientWidth, h = $('viewport-container').clientHeight, b = view2d.bounds;
+    const sx = (w - 60) / (b.maxX - b.minX), sy = (h - 60) / (b.maxY - b.minY);
+    view2d.scale = Math.max(1e-5, Math.min(sx, sy));
+    view2d.ox = (w - (b.minX + b.maxX) * view2d.scale) / 2;
+    view2d.oy = (h + (b.minY + b.maxY) * view2d.scale) / 2;
+    draw2D();
+  }
+  function worldToScreen(x,y) { return {x: x*view2d.scale + view2d.ox, y: -y*view2d.scale + view2d.oy}; }
+  function screenToWorld(x,y) { return {x:(x-view2d.ox)/view2d.scale, y:-(y-view2d.oy)/view2d.scale}; }
+  function draw2D() {
+    if (!ctx2d || state.mode !== '2d') return;
+    const w = $('viewport-container').clientWidth, h = $('viewport-container').clientHeight;
+    ctx2d.clearRect(0,0,w,h);
+    ctx2d.fillStyle = state.theme === 'oscuro' ? '#020617' : state.theme === 'medio' ? '#cbd5e1' : '#f8fafc';
+    ctx2d.fillRect(0,0,w,h);
+    for (const e of view2d.entities) drawDxfEntity(e);
+    if (state.measurePoints.length) {
+      ctx2d.strokeStyle='#ef4444'; ctx2d.fillStyle='#ef4444'; ctx2d.lineWidth=1.5;
+      const pts=state.measurePoints.map(p=>worldToScreen(p.x,p.y));
+      if (pts.length===2) { ctx2d.beginPath(); ctx2d.moveTo(pts[0].x,pts[0].y); ctx2d.lineTo(pts[1].x,pts[1].y); ctx2d.stroke(); }
+      pts.forEach(p=>{ctx2d.beginPath();ctx2d.arc(p.x,p.y,4,0,Math.PI*2);ctx2d.fill();});
+    }
+  }
+  function drawDxfEntity(e) {
+    const col = e.color ? `#${Number(e.color).toString(16).padStart(6,'0').slice(-6)}` : (state.theme === 'oscuro' ? '#e2e8f0' : '#334155');
+    ctx2d.strokeStyle = col; ctx2d.fillStyle = col; ctx2d.lineWidth = 1;
+    const pt = p => worldToScreen(p.x,p.y);
+    const line = (a,b) => { if (!a || !b) return; const A=pt(a), B=pt(b); ctx2d.beginPath();ctx2d.moveTo(A.x,A.y);ctx2d.lineTo(B.x,B.y);ctx2d.stroke(); };
+    if (e.type === 'LINE') line(e.startPoint,e.endPoint);
+    else if (e.type === 'LWPOLYLINE' || e.type === 'POLYLINE') {
+      const vs=e.vertices||[]; if (!vs.length) return;
+      ctx2d.beginPath(); const p0=pt(vs[0]);ctx2d.moveTo(p0.x,p0.y);
+      for(let i=1;i<vs.length;i++){const p=pt(vs[i]);ctx2d.lineTo(p.x,p.y);}
+      if (e.shape || e.closed) ctx2d.closePath(); ctx2d.stroke();
+    } else if (e.type === 'CIRCLE' && e.center) {
+      const c=pt(e.center); ctx2d.beginPath();ctx2d.arc(c.x,c.y,Math.abs(e.radius*view2d.scale),0,Math.PI*2);ctx2d.stroke();
+    } else if (e.type === 'ARC' && e.center) {
+      const c=pt(e.center), r=Math.abs(e.radius*view2d.scale);
+      ctx2d.beginPath(); ctx2d.arc(c.x,c.y,r,-e.endAngle,-e.startAngle); ctx2d.stroke();
+    } else if (e.type === 'POINT' && e.position) {
+      const p=pt(e.position);ctx2d.beginPath();ctx2d.arc(p.x,p.y,2,0,Math.PI*2);ctx2d.fill();
+    } else if (e.type === 'SOLID' || e.type === 'TRACE' || e.type === '3DFACE') {
+      const vs=e.vertices||[]; if(vs.length){ctx2d.beginPath();const p=pt(vs[0]);ctx2d.moveTo(p.x,p.y);vs.slice(1).forEach(v=>{const q=pt(v);ctx2d.lineTo(q.x,q.y);});ctx2d.closePath();ctx2d.stroke();}
+    } else if (e.type === 'TEXT' || e.type === 'MTEXT') {
+      const p=pt(e.startPoint||e.position||{x:0,y:0}); ctx2d.font=`${Math.max(8,Math.min(32,(e.textHeight||e.height||10)*view2d.scale))}px sans-serif`; ctx2d.fillText(String(e.text||e.string||''),p.x,p.y);
+    } else if (e.type === 'ELLIPSE' && e.center) {
+      const c=pt(e.center), major=e.majorAxisEndPoint||{x:e.radius||1,y:0}; const rx=Math.hypot(major.x,major.y)*view2d.scale;
+      ctx2d.beginPath();ctx2d.ellipse(c.x,c.y,rx,Math.max(1,rx*(e.axisRatio||1)),0,0,Math.PI*2);ctx2d.stroke();
+    }
+  }
+  function on2DPointerDown(e) {
+    const rect=canvas2d.getBoundingClientRect(), x=e.clientX-rect.left,y=e.clientY-rect.top;
+    if (state.measureMode) {
+      const p=screenToWorld(x,y); state.measurePoints.push(p);
+      if (state.measurePoints.length===2) {
+        const [a,b]=state.measurePoints, d=Math.hypot(b.x-a.x,b.y-a.y);
+        $('measure-label').textContent=`Distancia 2D: ${formatNumber(d)} unidades de dibujo`;
+        $('measure-label').classList.remove('hidden');
+        status(`Medición 2D: ${formatNumber(d)} unidades de dibujo. Comprueba las unidades del archivo.`);
+        state.measureMode=false; $('btn-measure').classList.remove('active');
+      }
+      draw2D(); return;
+    }
+    view2d.dragging=true; view2d.lastX=x; view2d.lastY=y; canvas2d.setPointerCapture(e.pointerId);
+  }
+  function on2DPointerMove(e) {
+    const rect=canvas2d.getBoundingClientRect(), x=e.clientX-rect.left,y=e.clientY-rect.top;
+    const p=screenToWorld(x,y); $('coords-text').textContent=`X: ${formatNumber(p.x)} Y: ${formatNumber(p.y)} Z: 0`;
+    if(view2d.dragging) {view2d.ox+=x-view2d.lastX;view2d.oy+=y-view2d.lastY;view2d.lastX=x;view2d.lastY=y;draw2D();}
+  }
+  function formatNumber(n) { return Number.isFinite(n) ? n.toLocaleString('es-ES',{maximumFractionDigits:3}) : '—'; }
+
+  function populateDxfMetadata(tab) {
+    const layers = tab.data.tables?.layer?.layers || {};
+    const layerNames = Object.keys(layers);
+    const counts = {};
+    tab.data.entities.forEach(e => { const l=e.layer || '0'; counts[l]=(counts[l]||0)+1; });
+    const tree=$('tree-container'); tree.replaceChildren();
+    if (!layerNames.length) layerNames.push(...Object.keys(counts));
+    layerNames.forEach(name => {
+      const row=document.createElement('label'); row.className='tree-item flex items-center gap-2';
+      const cb=document.createElement('input'); cb.type='checkbox';cb.checked=true;cb.addEventListener('change',()=>{tab.data.entities.forEach(e=>{if((e.layer||'0')===name)e._hidden=!cb.checked;});view2d.entities=tab.data.entities.filter(e=>!e._hidden);draw2D();});
+      const text=document.createElement('span');text.textContent=`${name} (${counts[name]||0})`;
+      row.append(cb,text);tree.append(row);
+    });
+    view2d.entities = tab.data.entities;
+    showProperties({Archivo:tab.name,Formato:'DXF',Entidades:tab.data.entities.length,'Capas detectadas':layerNames.length,'Unidades del archivo':tab.data.header?.$INSUNITS ?? 'No determinadas',Nota:'La medición se expresa en unidades de dibujo; verifica la escala.'});
+  }
+  function showProperties(obj) {
+    const root=$('properties-container');root.replaceChildren();
+    for (const [k,v] of Object.entries(obj)) {
+      const row=document.createElement('div');row.className='border-b pb-2 mb-2';row.style.borderColor='var(--border-color)';
+      const key=document.createElement('div');key.className='font-semibold mb-1';key.textContent=k;
+      const val=document.createElement('div');val.className='break-words';val.textContent=escapeText(v);
+      row.append(key,val);root.append(row);
+    }
+  }
+
+  function destroy3D() {
+    if (state.animationId) cancelAnimationFrame(state.animationId);
+    state.animationId=null;
+    if (state.controls) state.controls.dispose();
+    if (state.renderer) {
+      state.renderer.dispose();
+      state.renderer.domElement.remove();
+    }
+    if (state.scene) {
+      state.scene.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material){if(Array.isArray(o.material))o.material.forEach(m=>m.dispose());else o.material.dispose();} });
+    }
+    state.scene=null;state.camera=null;state.renderer=null;state.controls=null;state.object3D=null;state.grid=null;
+  }
+  function init3D() {
+    destroy3D();
+    const container=$('canvas-3d');container.classList.remove('hidden');
+    state.scene=new THREE.Scene();
+    state.scene.background=new THREE.Color(state.theme==='oscuro'?0x020617:0xf1f5f9);
+    state.camera=new THREE.PerspectiveCamera(45,Math.max(1,container.clientWidth)/Math.max(1,container.clientHeight),0.01,1e7);
+    state.camera.position.set(10,10,10);
+    state.renderer=new THREE.WebGLRenderer({antialias:true});
+    state.renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+    state.renderer.setSize(container.clientWidth,container.clientHeight);
+    container.appendChild(state.renderer.domElement);
+    state.controls=new THREE.OrbitControls(state.camera,state.renderer.domElement);
+    state.controls.enableDamping=true;
+    state.scene.add(new THREE.HemisphereLight(0xffffff,0x64748b,1.2));
+    const light=new THREE.DirectionalLight(0xffffff,.8);light.position.set(10,20,15);state.scene.add(light);
+    state.grid=new THREE.GridHelper(100,100,0x2563eb,0x94a3b8);state.scene.add(state.grid);
+    state.raycaster=new THREE.Raycaster();state.pointer=new THREE.Vector2();
+    state.renderer.domElement.addEventListener('pointerdown',on3DPointerDown);
+    state.renderer.domElement.addEventListener('pointermove',on3DPointerMove);
+    const render=()=>{ if(!state.renderer)return;state.animationId=requestAnimationFrame(render);state.controls?.update();state.renderer.render(state.scene,state.camera); };
+    render();
+  }
+  function on3DPointerDown(e) {
+    if(!state.measureMode || !state.object3D)return;
+    const rect=state.renderer.domElement.getBoundingClientRect();
+    state.pointer.x=((e.clientX-rect.left)/rect.width)*2-1;
+    state.pointer.y=-((e.clientY-rect.top)/rect.height)*2+1;
+    state.raycaster.setFromCamera(state.pointer,state.camera);
+    const hits=state.raycaster.intersectObject(state.object3D,true);
+    if(!hits.length){status('No se ha seleccionado geometría en ese punto.');return;}
+    const p=hits[0].point.clone();state.measurePoints.push(p);
+    if(state.measurePoints.length===2){
+      const [a,b]=state.measurePoints;const d=a.distanceTo(b);
+      const geom=new THREE.BufferGeometry().setFromPoints([a,b]);
+      const line=new THREE.Line(geom,new THREE.LineBasicMaterial({color:0xef4444}));state.scene.add(line);state.measureObjects.push(line);
+      $('measure-label').textContent=`Distancia 3D: ${formatNumber(d)} unidades de modelo`;
+      $('measure-label').classList.remove('hidden');state.measureMode=false;$('btn-measure').classList.remove('active');
+      status(`Medición 3D: ${formatNumber(d)} unidades de modelo. Verifica las unidades del archivo.`);
+    }
+  }
+  function on3DPointerMove(e) {
+    const rect=state.renderer.domElement.getBoundingClientRect();
+    state.pointer.x=((e.clientX-rect.left)/rect.width)*2-1;state.pointer.y=-((e.clientY-rect.top)/rect.height)*2+1;
+    state.raycaster.setFromCamera(state.pointer,state.camera);
+    const hit=state.object3D ? state.raycaster.intersectObject(state.object3D,true)[0] : null;
+    if(hit){const p=hit.point;$('coords-text').textContent=`X: ${formatNumber(p.x)} Y: ${formatNumber(p.y)} Z: ${formatNumber(p.z)}`;}
+  }
+  function fit3D() {
+    if(!state.object3D || !state.camera) { if(state.mode==='2d')fit2D();return; }
+    const box=new THREE.Box3().setFromObject(state.object3D);
+    if(box.isEmpty())return;
+    const size=box.getSize(new THREE.Vector3()), center=box.getCenter(new THREE.Vector3());
+    const maxDim=Math.max(size.x,size.y,size.z,1);
+    state.controls.target.copy(center);
+    state.camera.position.copy(center).add(new THREE.Vector3(maxDim*1.5,maxDim*1.2,maxDim*1.5));
+    state.camera.near=Math.max(maxDim/10000,0.001);state.camera.far=maxDim*100;state.camera.updateProjectionMatrix();
+    state.controls.update();
+  }
+  function set3DView(type) {
+    if(!state.object3D || !state.camera){status('No hay geometría 3D cargada.');return;}
+    const box=new THREE.Box3().setFromObject(state.object3D),center=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3()),d=Math.max(size.x,size.y,size.z,1)*2;
+    const dirs={top:new THREE.Vector3(0,1,0),front:new THREE.Vector3(0,0,1),iso:new THREE.Vector3(1,1,1)};
+    state.camera.position.copy(center).add(dirs[type].clone().multiplyScalar(d));
+    state.camera.lookAt(center);state.controls.target.copy(center);state.controls.update();
+  }
+  function clearMeasures() {
+    if(state.scene) for(const o of state.measureObjects){state.scene.remove(o);o.geometry?.dispose();o.material?.dispose();}
+    state.measureObjects=[];
+    state.measurePoints=[];
+    if(state.mode==='2d')draw2D();
+    $('measure-label').classList.add('hidden');
+  }
+  function toggleMeasure() {
+    state.measureMode=!state.measureMode;state.measurePoints=[];
+    $('btn-measure').classList.toggle('active',state.measureMode);
+    $('measure-label').classList.add('hidden');
+    if(state.mode==='2d')draw2D();
+    status(state.measureMode?'Medición activada: selecciona dos puntos.':'Medición cancelada.');
+  }
+  function toggleCut() {
+    if(state.mode!=='3d' || !state.renderer || !state.object3D){status('El corte 3D requiere un modelo 3D cargado.',true);return;}
+    state.clippingEnabled=!state.clippingEnabled;
+    state.renderer.localClippingEnabled=state.clippingEnabled;
+    if(!state.clippingPlane)state.clippingPlane=new THREE.Plane(new THREE.Vector3(1,0,0),0);
+    state.object3D.traverse(o=>{if(o.material){const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{m.clippingPlanes=state.clippingEnabled?[state.clippingPlane]:[];m.needsUpdate=true;});}});
+    if(state.clippingEnabled){
+      const slider=document.createElement('input');slider.type='range';slider.min='-10';slider.max='10';slider.step='.1';slider.value='0';slider.title='Posición del plano de corte';
+      slider.style.cssText='position:absolute;top:12px;right:12px;z-index:12;width:180px';
+      slider.id='cut-slider';$('viewport-container').append(slider);
+      slider.addEventListener('input',()=>{state.clippingPlane.constant=Number(slider.value);});
+      status('Plano de corte X activado. Ajusta el deslizador.');
+    } else { $('cut-slider')?.remove();status('Plano de corte desactivado.'); }
+  }
+
+  function resetView() {
+    state.measureMode=false;state.measurePoints=[];clearMeasures();
+    $('canvas-2d').classList.add('hidden');$('canvas-3d').classList.add('hidden');
+    $('measure-label').classList.add('hidden');$('btn-measure').classList.remove('active');
+    destroy3D();state.mode=null;
+  }
+
+  $('file-input').addEventListener('change',e=>{if(e.target.files?.length)openFiles(e.target.files);e.target.value='';});
+  window.addEventListener('dragover',e=>e.preventDefault());
+  window.addEventListener('drop',e=>{e.preventDefault();if(e.dataTransfer?.files?.length)openFiles(e.dataTransfer.files);});
+  $('theme-select').addEventListener('change',e=>setTheme(e.target.value));
+  $('btn-fit').addEventListener('click',()=>state.mode==='2d'?fit2D():fit3D());
+  $('btn-top').addEventListener('click',()=>set3DView('top'));
+  $('btn-front').addEventListener('click',()=>set3DView('front'));
+  $('btn-iso').addEventListener('click',()=>set3DView('iso'));
+  $('btn-measure').addEventListener('click',toggleMeasure);
+  $('btn-clear-measures').addEventListener('click',clearMeasures);
+  $('btn-grid').addEventListener('click',()=>{if(state.grid){state.grid.visible=!state.grid.visible;status(`Rejilla ${state.grid.visible?'visible':'oculta'}.`);}else status('La rejilla solo está disponible en el modo 3D.');});
+  $('btn-cut').addEventListener('click',toggleCut);
+  window.addEventListener('resize',()=>{
+    if(state.mode==='2d')resize2D();
+    if(state.renderer&&state.camera){const c=$('canvas-3d'),w=Math.max(1,c.clientWidth),h=Math.max(1,c.clientHeight);state.camera.aspect=w/h;state.camera.updateProjectionMatrix();state.renderer.setSize(w,h);}
+  });
+  window.addEventListener('keydown',e=>{
+    if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;
+    if(e.key.toLowerCase()==='a')$('btn-fit').click();
+    if(e.key==='Escape'){state.measureMode=false;$('btn-measure').classList.remove('active');status('Herramienta cancelada.');}
+  });
+
+  // Modo 3D de demostración explícito: no se presenta como lectura del archivo del usuario.
+  window.openDemoCube = function() {
+    const tab={id:`demo_${Date.now()}`,name:'Modelo de demostración (cubo)',ext:'demo',file:null,mode:'3d',data:null};
+    state.tabs.push(tab);state.activeId=tab.id;renderTabs();
+    $('dropzone').classList.add('hidden');$('sidebar-left').classList.remove('hidden');$('sidebar-left').classList.add('flex');
+    $('sidebar-right').classList.remove('hidden');$('sidebar-right').classList.add('flex');
+    resetView();init3D();state.mode='3d';
+    const geom=new THREE.BoxGeometry(2,2,2),mat=new THREE.MeshStandardMaterial({color:0x2563eb,roughness:.5});
+    state.object3D=new THREE.Mesh(geom,mat);state.scene.add(state.object3D);fit3D();
+    $('tree-container').textContent='Modelo de demostración: cubo';
+    showProperties({Archivo:tab.name,Formato:'Demo 3D',Unidades:'Unidades arbitrarias',Nota:'Esta geometría es una muestra, no el contenido de un archivo CAD.'});
+    status('Cubo de demostración cargado.');
+  };
+})();
+</script>
+</body>
+</html>
