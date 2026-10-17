@@ -9,13 +9,17 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js"></script>
-  <!-- Lector DXF en navegador. DGN no se interpreta de forma nativa en este HTML. -->
-  <script src="https://cdn.jsdelivr.net/npm/dxf-parser@1.1.2/dist/dxf-parser.min.js"></script>
+  <!-- DXF -->
+  <script src="https://cdn.jsdelivr.net/npm/dxf-parser@1.1.2/dist/dxf-parser.js"></script>
+  <!-- Contenedor OLE (Inventor .ipt/.iam/.idw/.ipn) y ZIP (ensamblajes para APS) -->
+  <script src="https://cdn.jsdelivr.net/npm/cfb@1.2.2/dist/cfb.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/FBXLoader.js"></script>
+  <!-- Bajo demanda: LibreDWG (WASM, DWG), occt-import-js (WASM, STEP/IGES/BREP), Autodesk Viewer (APS) -->
   <style>
     :root { --bg-main:#f8fafc; --bg-panel:#fff; --border-color:#e2e8f0; --text-main:#1e293b; --text-muted:#64748b; --canvas-bg:#f1f5f9; }
     body.theme-medio { --bg-main:#e2e8f0; --bg-panel:#cbd5e1; --border-color:#94a3b8; --text-main:#0f172a; --text-muted:#475569; --canvas-bg:#cbd5e1; }
@@ -27,13 +31,25 @@
     .toolbar-btn.active { background:#dbeafe; border-color:#60a5fa; color:#1d4ed8; }
     body.theme-oscuro .toolbar-btn.active { background:#1e3a8a; color:#dbeafe; }
     #viewport-container { background:var(--canvas-bg); min-width:0; }
-    #canvas-3d, #canvas-2d { position:absolute; inset:0; width:100%; height:100%; }
+    #canvas-3d, #canvas-2d, #aps-viewer, #info-view { position:absolute; inset:0; width:100%; height:100%; }
     #canvas-3d canvas { display:block; width:100%; height:100%; }
-    #canvas-2d { cursor:crosshair; }
+    #canvas-2d { cursor:crosshair; touch-action:none; }
+    #info-view { overflow:auto; }
     .status { font-size:11px; color:var(--text-muted); }
     .tree-item { padding:.35rem; border-radius:.25rem; }
     .tree-item:hover { background:rgba(100,116,139,.12); }
-    button:focus-visible, input:focus-visible { outline:2px solid #3b82f6; outline-offset:2px; }
+    .tree-item.sel { background:rgba(59,130,246,.18); }
+    .swatch { width:10px; height:10px; border-radius:2px; border:1px solid var(--border-color); flex:none; }
+    .group-title { font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin:.6rem 0 .3rem; }
+    .field { background:var(--bg-main); color:var(--text-main); border:1px solid var(--border-color); border-radius:.35rem; padding:.4rem .5rem; width:100%; font-size:.8rem; }
+    dialog { background:var(--bg-panel); color:var(--text-main); border:1px solid var(--border-color); }
+    dialog::backdrop { background:rgba(15,23,42,.45); }
+    .btn-primary { background:#2563eb; color:#fff; border-radius:.45rem; padding:.45rem .8rem; font-size:.8rem; }
+    .btn-primary:hover { background:#1d4ed8; }
+    .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
+    .progress { height:6px; border-radius:3px; background:var(--border-color); overflow:hidden; }
+    .progress > div { height:100%; background:#2563eb; width:0; transition:width .3s; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid #3b82f6; outline-offset:2px; }
   </style>
 </head>
 <body class="theme-claro h-screen flex flex-col overflow-hidden text-sm">
@@ -41,6 +57,11 @@
     <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
       <div class="flex items-center gap-2 font-bold text-base"><i class="fa-solid fa-cube text-blue-500"></i><span>Visor CAD</span></div>
       <div class="flex flex-wrap items-center gap-1">
+        <label class="toolbar-btn cursor-pointer" title="Abrir archivos"><i class="fa-solid fa-folder-open"></i> Abrir
+          <input type="file" id="file-input-2" class="hidden" multiple></label>
+        <label class="toolbar-btn cursor-pointer" title="Abrir carpeta de proyecto (ensamblajes Inventor con sus piezas)"><i class="fa-solid fa-folder-tree"></i> Carpeta
+          <input type="file" id="dir-input" class="hidden" webkitdirectory multiple></label>
+        <span class="mx-1 opacity-30">|</span>
         <button class="toolbar-btn" id="btn-fit" title="Ajustar todo (A)"><i class="fa-solid fa-expand"></i> Ajustar</button>
         <button class="toolbar-btn" id="btn-top" title="Vista superior"><i class="fa-solid fa-arrow-down"></i> Superior</button>
         <button class="toolbar-btn" id="btn-front" title="Vista frontal"><i class="fa-solid fa-square"></i> Frontal</button>
@@ -49,6 +70,7 @@
         <button class="toolbar-btn" id="btn-clear-measures" title="Borrar mediciones"><i class="fa-solid fa-eraser"></i> Borrar medidas</button>
         <button class="toolbar-btn" id="btn-grid" title="Mostrar/ocultar rejilla"><i class="fa-solid fa-border-all"></i> Rejilla</button>
         <button class="toolbar-btn" id="btn-cut" title="Activar/desactivar plano de corte"><i class="fa-solid fa-scissors"></i> Corte</button>
+        <button class="toolbar-btn" id="btn-aps-settings" title="Configurar Autodesk APS (geometría Inventor, IFC, DGN…)"><i class="fa-solid fa-gear"></i> APS</button>
         <label class="text-xs ml-2">Tema
           <select id="theme-select" class="border rounded px-1 py-1 text-xs" style="background:var(--bg-panel);border-color:var(--border-color)">
             <option value="claro">Claro</option><option value="medio">Medio</option><option value="oscuro">Oscuro</option>
@@ -60,8 +82,8 @@
   </header>
 
   <div class="flex flex-1 min-h-0 overflow-hidden">
-    <aside id="sidebar-left" class="panel border-r w-60 shrink-0 hidden flex-col">
-      <div class="p-3 border-b font-semibold text-xs" style="border-color:var(--border-color)">Capas / entidades</div>
+    <aside id="sidebar-left" class="panel border-r w-64 shrink-0 hidden flex-col">
+      <div id="tree-title" class="p-3 border-b font-semibold text-xs" style="border-color:var(--border-color)">Capas / entidades</div>
       <div id="tree-container" class="flex-1 overflow-auto p-2 text-xs"></div>
     </aside>
 
@@ -70,23 +92,32 @@
         <div class="text-5xl text-blue-500 mb-4"><i class="fa-solid fa-cloud-arrow-up"></i></div>
         <h1 class="text-lg font-bold mb-2">Visor CAD</h1>
         <p class="text-center max-w-xl mb-4 text-sm" style="color:var(--text-muted)">
-          Abre DXF 2D y modelos OBJ, STL, PLY, FBX, GLB o glTF. DGN, DWG, IFC y STEP requieren integrar lectores especializados o conversión.
+          DWG y DXF (2D, en local), Inventor IPT · IAM · IDW · IPN · IPE (propiedades y miniatura en local; geometría vía Autodesk APS),
+          STEP · IGES · BREP · OBJ · STL · PLY · FBX · GLB/glTF (3D, en local). IFC y DGN vía Autodesk APS.
         </p>
-        <label class="cursor-pointer px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-          Seleccionar archivo
-          <input type="file" id="file-input" class="hidden" multiple accept=".dxf,.dgn,.dwg,.json,.glb,.gltf,.stl,.obj,.ply,.fbx,.ifc,.step,.stp">
-        </label>
-        <p class="status mt-3 text-center">También puedes arrastrar y soltar. Los archivos se procesan localmente cuando el formato está soportado.</p>
+        <div class="flex gap-2 flex-wrap justify-center">
+          <label class="cursor-pointer px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+            Seleccionar archivos
+            <input type="file" id="file-input" class="hidden" multiple>
+          </label>
+          <label class="cursor-pointer px-4 py-2 border rounded-lg" style="border-color:var(--border-color)">
+            Abrir carpeta de proyecto
+            <input type="file" id="dir-input-2" class="hidden" webkitdirectory multiple>
+          </label>
+        </div>
+        <p class="status mt-3 text-center max-w-xl">También puedes arrastrar y soltar. Para ensamblajes (.iam) o planos (.idw) suelta el archivo junto con sus piezas, un .zip o la carpeta del proyecto.</p>
       </div>
       <div id="canvas-3d" class="hidden"></div>
       <canvas id="canvas-2d" class="hidden"></canvas>
-      <div id="tool-status" class="absolute bottom-3 left-3 z-10 rounded px-3 py-2 bg-white/90 text-slate-800 shadow text-xs hidden"></div>
-      <div id="measure-label" class="absolute top-3 left-3 z-10 rounded px-3 py-2 bg-white/90 text-slate-800 shadow text-xs hidden"></div>
+      <div id="aps-viewer" class="hidden"></div>
+      <div id="info-view" class="hidden"></div>
+      <div id="tool-status" class="absolute bottom-3 left-3 z-30 rounded px-3 py-2 bg-white/90 text-slate-800 shadow text-xs hidden"></div>
+      <div id="measure-label" class="absolute top-3 left-3 z-30 rounded px-3 py-2 bg-white/90 text-slate-800 shadow text-xs hidden"></div>
     </main>
 
-    <aside id="sidebar-right" class="panel border-l w-64 shrink-0 hidden flex-col">
+    <aside id="sidebar-right" class="panel border-l w-72 shrink-0 hidden flex-col">
       <div class="p-3 border-b font-semibold text-xs" style="border-color:var(--border-color)">Propiedades</div>
-      <div id="properties-container" class="flex-1 overflow-auto p-3 text-xs space-y-2"></div>
+      <div id="properties-container" class="flex-1 overflow-auto p-3 text-xs"></div>
     </aside>
   </div>
   <footer class="panel border-t px-3 py-1 flex items-center justify-between gap-2 shrink-0" style="border-color:var(--border-color)">
@@ -94,86 +125,725 @@
     <span id="coords-text" class="status">X: — Y: — Z: —</span>
   </footer>
 
+  <dialog id="aps-dialog" class="rounded-xl p-0 w-[min(560px,92vw)]">
+    <form method="dialog" class="p-5 space-y-3 text-sm">
+      <div class="flex items-center justify-between"><h2 class="font-bold text-base">Autodesk Platform Services (APS)</h2><button value="cancel" class="opacity-60 hover:opacity-100" title="Cerrar">✕</button></div>
+      <p class="text-xs" style="color:var(--text-muted)">La geometría de Inventor (IPT/IAM/IDW/IPN), IFC y DGN se convierte con el servicio oficial Model Derivative de Autodesk y se muestra con Autodesk Viewer. Las credenciales APS quedan en tu función proxy (Supabase Edge Function <code>aps-proxy</code>), nunca en este HTML.</p>
+      <label class="block text-xs font-semibold">URL de la función proxy
+        <input id="aps-url" class="field mt-1" placeholder="https://xxxx.supabase.co/functions/v1/aps-proxy" autocomplete="off"></label>
+      <label class="block text-xs font-semibold">Clave del visor (VISOR_KEY, opcional)
+        <input id="aps-key" class="field mt-1" type="password" autocomplete="off"></label>
+      <label class="block text-xs font-semibold">Anon key de Supabase (solo si la función verifica JWT)
+        <input id="aps-anon" class="field mt-1" type="password" autocomplete="off"></label>
+      <label class="flex items-center gap-2 text-xs"><input id="aps-auto" type="checkbox"> Convertir automáticamente al abrir archivos Inventor</label>
+      <div class="flex items-center gap-2 pt-1">
+        <button id="aps-test" type="button" class="toolbar-btn">Probar conexión</button>
+        <span id="aps-test-out" class="text-xs" style="color:var(--text-muted)"></span>
+        <span class="flex-1"></span>
+        <button id="aps-save" value="save" class="btn-primary">Guardar</button>
+      </div>
+      <p class="text-[11px]" style="color:var(--text-muted)">Al convertir, el archivo se sube a tu bucket APS (retención 30 días). No uses esta opción con documentación confidencial si tu contrato no lo permite.</p>
+    </form>
+  </dialog>
+
+<script>
+// ===== Motor 2D común para DXF (dxf-parser) y DWG (libredwg-web) =====
+// Convierte entidades a primitivas teseladas en coordenadas de mundo.
+const CAD2D = (() => {
+  const TAU = Math.PI * 2;
+
+  // --- Paleta ACI (AutoCAD Color Index) ---
+  const ACI = (() => {
+    const t = new Array(256).fill(0);
+    const base = [0x000000, 0xff0000, 0xffff00, 0x00ff00, 0x00ffff, 0x0000ff, 0xff00ff, 0xffffff, 0x808080, 0xc0c0c0];
+    base.forEach((c, i) => t[i] = c);
+    const vals = [255, 255, 204, 204, 153, 153, 127, 127, 76, 76];
+    for (let i = 10; i < 250; i++) {
+      const hue = Math.floor((i - 10) / 10) * 15, sub = (i - 10) % 10;
+      const V = vals[sub], m = sub % 2 ? Math.round(V * 0.5) : 0;
+      const h = hue / 60, f = h - Math.floor(h), up = Math.round(m + (V - m) * f), dn = Math.round(V - (V - m) * f);
+      const [r, g, b] = [[V, up, m], [dn, V, m], [m, V, up], [m, dn, V], [up, m, V], [V, m, dn]][Math.floor(h) % 6];
+      t[i] = (r << 16) | (g << 8) | b;
+    }
+    [0x333333, 0x505050, 0x696969, 0x828282, 0xbebebe, 0xffffff].forEach((c, k) => t[250 + k] = c);
+    return t;
+  })();
+  const FG = 'fg'; // color 7 / blanco-negro según tema
+  const hex = n => '#' + (n & 0xffffff).toString(16).padStart(6, '0');
+  function aciColor(i) { return i === 7 || i === 255 ? FG : hex(ACI[i] || 0); }
+
+  // --- Matrices afines 2D [a,b,c,d,e,f] ---
+  const I = [1, 0, 0, 1, 0, 0];
+  const mul = (M, N) => [M[0] * N[0] + M[2] * N[1], M[1] * N[0] + M[3] * N[1], M[0] * N[2] + M[2] * N[3], M[1] * N[2] + M[3] * N[3], M[0] * N[4] + M[2] * N[5] + M[4], M[1] * N[4] + M[3] * N[5] + M[5]];
+  const tr = (x, y) => [1, 0, 0, 1, x, y];
+  const rot = a => [Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), 0, 0];
+  const scl = (x, y) => [x, 0, 0, y, 0, 0];
+  const ap = (M, x, y) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]];
+  const det = M => M[0] * M[3] - M[1] * M[2];
+
+  // --- Teselado ---
+  function arcPts(cx, cy, r, a0, a1, ccw = true) {
+    if (!ccw) [a0, a1] = [a1, a0];
+    while (a1 <= a0) a1 += TAU;
+    if (a1 - a0 > TAU) a1 = a0 + TAU;
+    const n = Math.max(6, Math.min(180, Math.ceil((a1 - a0) / TAU * 96)));
+    const pts = [];
+    for (let i = 0; i <= n; i++) { const a = a0 + (a1 - a0) * i / n; pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }
+    return ccw ? pts : pts.reverse();
+  }
+  function ellipsePts(c, maj, ratio, t0 = 0, t1 = TAU, ccw = true) {
+    if (!ccw) [t0, t1] = [t1, t0];
+    while (t1 <= t0) t1 += TAU;
+    if (t1 - t0 > TAU + 1e-9) t1 = t0 + TAU;
+    const mn = [-maj.y * ratio, maj.x * ratio];
+    const n = Math.max(8, Math.min(180, Math.ceil((t1 - t0) / TAU * 96)));
+    const pts = [];
+    for (let i = 0; i <= n; i++) { const t = t0 + (t1 - t0) * i / n, ct = Math.cos(t), st = Math.sin(t); pts.push([c.x + ct * maj.x + st * mn[0], c.y + ct * maj.y + st * mn[1]]); }
+    return ccw ? pts : pts.reverse();
+  }
+  function bulgePts(vs, closed) {
+    const out = [];
+    const n = vs.length;
+    for (let i = 0; i < n; i++) {
+      const p = vs[i], q = vs[(i + 1) % n];
+      out.push([p.x, p.y]);
+      if (i === n - 1 && !closed) break;
+      const b = p.bulge || 0;
+      if (Math.abs(b) > 1e-9 && q) {
+        const th = 4 * Math.atan(b), dx = q.x - p.x, dy = q.y - p.y, L = Math.hypot(dx, dy);
+        if (L < 1e-12) continue;
+        const r = L / (2 * Math.sin(th / 2));
+        const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2, h = r * Math.cos(th / 2);
+        const cx = mx - h * dy / L, cy = my + h * dx / L;
+        const a0 = Math.atan2(p.y - cy, p.x - cx);
+        const k = Math.max(4, Math.ceil(Math.abs(th) / TAU * 96));
+        for (let j = 1; j < k; j++) { const a = a0 + th * j / k; out.push([cx + Math.abs(r) * Math.cos(a), cy + Math.abs(r) * Math.sin(a)]); }
+      }
+    }
+    if (closed && out.length) out.push(out[0].slice());
+    return out;
+  }
+  function splinePts(deg, ctrl, knots, weights, fit) {
+    deg = deg || 3;
+    if (ctrl && ctrl.length > deg && knots && knots.length === ctrl.length + deg + 1) {
+      const P = ctrl.map((c, i) => { const w = (weights && weights[i]) || c.weight || 1; return [c.x * w, c.y * w, w]; });
+      const u0 = knots[deg], u1 = knots[knots.length - deg - 1];
+      const N = Math.max(24, Math.min(600, ctrl.length * 10));
+      const pts = [];
+      for (let s = 0; s <= N; s++) {
+        let u = u0 + (u1 - u0) * s / N; if (s === N) u = u1 - 1e-10 * Math.max(1, Math.abs(u1));
+        let k = deg; while (k < knots.length - deg - 2 && u >= knots[k + 1]) k++;
+        const d = []; for (let j = 0; j <= deg; j++) d.push(P[j + k - deg].slice());
+        for (let r = 1; r <= deg; r++) for (let j = deg; j >= r; j--) {
+          const i = j + k - deg, den = knots[i + deg - r + 1] - knots[i];
+          const a = den === 0 ? 0 : (u - knots[i]) / den;
+          for (let c = 0; c < 3; c++) d[j][c] = (1 - a) * d[j - 1][c] + a * d[j][c];
+        }
+        const w = d[deg][2] || 1; pts.push([d[deg][0] / w, d[deg][1] / w]);
+      }
+      return pts;
+    }
+    const F = fit && fit.length ? fit : ctrl;
+    if (!F || F.length < 2) return [];
+    if (F.length === 2) return F.map(p => [p.x, p.y]);
+    const pts = []; // Catmull-Rom por puntos de ajuste
+    for (let i = 0; i < F.length - 1; i++) {
+      const p0 = F[Math.max(0, i - 1)], p1 = F[i], p2 = F[i + 1], p3 = F[Math.min(F.length - 1, i + 2)];
+      for (let t = 0; t < 1; t += 0.1) {
+        const t2 = t * t, t3 = t2 * t;
+        const f = (a, b, c, d) => 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
+        pts.push([f(p0.x, p1.x, p2.x, p3.x), f(p0.y, p1.y, p2.y, p3.y)]);
+      }
+    }
+    const l = F[F.length - 1]; pts.push([l.x, l.y]);
+    return pts;
+  }
+  function cleanMText(s) {
+    return String(s || '')
+      .replace(/\\P/g, '\n').replace(/\\~/g, ' ')
+      .replace(/\\[ACFHQTWfchqtw][^;\\}]*;/g, '')
+      .replace(/\\S([^;]*)\^([^;]*);/g, '$1/$2').replace(/\\S([^;]*)[#\/]([^;]*);/g, '$1/$2')
+      .replace(/\\[LlOoKkNn]/g, '').replace(/[{}]/g, '')
+      .replace(/%%[cC]/g, 'Ø').replace(/%%[dD]/g, '°').replace(/%%[pP]/g, '±').replace(/%%[uUoO]/g, '').replace(/%%%/g, '%')
+      .replace(/\\\\/g, '\\');
+  }
+  function cleanText(s) { return String(s || '').replace(/%%[cC]/g, 'Ø').replace(/%%[dD]/g, '°').replace(/%%[pP]/g, '±').replace(/%%[uUoO]/g, '').replace(/%%%/g, '%'); }
+
+  // --- Constructor de modelo ---
+  function newModel(source) {
+    return { source, layers: new Map(), prims: [], texts: [], spaces: [{ id: 'model', name: 'Modelo' }], unsupported: {}, stats: { entities: 0 } };
+  }
+  function addLayer(model, name, color, visible = true) {
+    if (!model.layers.has(name)) model.layers.set(name, { name, color: color || FG, visible, count: 0 });
+    return model.layers.get(name);
+  }
+
+  // ctx: {M, layer (heredada para capa 0), color (heredado para BYBLOCK), space, depth}
+  function makeEmitter(model, adapter) {
+    function resolveColor(e, ctx) {
+      const ci = e.colorIndex;
+      if (ci === 0) return ctx.color || FG;                       // BYBLOCK
+      if (ci > 0 && ci < 256) return aciColor(ci);
+      if (adapter.trueColor(e) != null && ci !== 256) return hex(adapter.trueColor(e));
+      const lay = model.layers.get(effLayer(e, ctx));             // BYLAYER
+      return lay ? lay.color : FG;
+    }
+    const effLayer = (e, ctx) => { const l = e.layer || '0'; return (l === '0' && ctx.layer) ? ctx.layer : l; };
+    function pushPl(e, ctx, pts, closed = false, fill = false) {
+      if (!pts || pts.length < 2) return;
+      const M = ctx.M, flat = new Float64Array(pts.length * 2);
+      for (let i = 0; i < pts.length; i++) { const [x, y] = ap(M, pts[i][0], pts[i][1]); flat[i * 2] = x; flat[i * 2 + 1] = y; }
+      const layer = effLayer(e, ctx);
+      addLayer(model, layer).count++;
+      model.prims.push({ layer, color: resolveColor(e, ctx), pts: flat, closed, fill, space: ctx.space });
+    }
+    function pushText(e, ctx, x, y, h, angle, text, align = 'left', baseline = 'alphabetic', mtextRow = -1) {
+      if (!text || !(h > 0)) return;
+      const M = ctx.M, [X, Y] = ap(M, x, y), sy = Math.sqrt(Math.abs(det(M))) || 1;
+      const [dx, dy] = [M[0] * Math.cos(angle) + M[2] * Math.sin(angle), M[1] * Math.cos(angle) + M[3] * Math.sin(angle)];
+      const layer = effLayer(e, ctx);
+      addLayer(model, layer).count++;
+      model.texts.push({ layer, color: resolveColor(e, ctx), x: X, y: Y, h: h * sy, rot: Math.atan2(dy, dx), text, align, baseline, mtextRow, space: ctx.space });
+    }
+    function ocs(e, ctx) { // eje Z negativo -> espejo en X
+      const ex = e.extrusionDirection || e.extrusion;
+      return ex && ex.z < -0.5 ? { ...ctx, M: mul(ctx.M, scl(-1, 1)) } : ctx;
+    }
+
+    function emit(e, ctx) {
+      if (!e || e.isVisible === false || e.visible === false) return;
+      model.stats.entities++;
+      const t = e.type;
+      try {
+        switch (t) {
+          case 'LINE': {
+            const a = e.startPoint || (e.vertices && e.vertices[0]), b = e.endPoint || (e.vertices && e.vertices[1]);
+            if (a && b) pushPl(e, ctx, [[a.x, a.y], [b.x, b.y]]);
+            break;
+          }
+          case 'CIRCLE': { const c = ocs(e, ctx); pushPl(e, c, arcPts(e.center.x, e.center.y, e.radius, 0, TAU), true); break; }
+          case 'ARC': { const c = ocs(e, ctx); pushPl(e, c, arcPts(e.center.x, e.center.y, e.radius, e.startAngle, e.endAngle)); break; }
+          case 'ELLIPSE': {
+            const full = Math.abs((e.endAngle ?? TAU) - (e.startAngle ?? 0)) >= TAU - 1e-6;
+            pushPl(e, ocs(e, ctx), ellipsePts(e.center, e.majorAxisEndPoint, e.axisRatio || 1, e.startAngle ?? 0, e.endAngle ?? TAU), full);
+            break;
+          }
+          case 'LWPOLYLINE': case 'POLYLINE': case 'POLYLINE2D': case 'POLYLINE3D': {
+            let vs = (e.vertices || []).map(v => v.vertex ? { ...v.vertex, bulge: v.bulge } : v).filter(v => v && Number.isFinite(v.x));
+            if (adapter.isPolyface(e)) { emitPolyface(e, ctx, vs); break; }
+            const closed = adapter.closed(e);
+            if (vs.length >= 2) pushPl(e, t === 'POLYLINE3D' ? ctx : ocs(e, ctx), bulgePts(vs, closed), closed);
+            break;
+          }
+          case 'SPLINE': {
+            const pts = splinePts(e.degree ?? e.degreeOfSplineCurve, e.controlPoints, e.knots || e.knotValues, e.weights, e.fitPoints);
+            pushPl(e, ctx, pts, !!(e.flag & 1 || e.closed));
+            break;
+          }
+          case 'POINT': { const p = e.position || e.point; if (p) pushPl(e, ctx, [[p.x, p.y], [p.x, p.y]]); break; }
+          case 'SOLID': case 'TRACE': {
+            const c = e.corner1 ? [e.corner1, e.corner2, e.corner4 || e.corner3, e.corner3] : (e.points || e.vertices || []);
+            const pts = (e.corner1 ? c : [c[0], c[1], c[3] || c[2], c[2]]).filter(Boolean).map(p => [p.x, p.y]);
+            pushPl(e, ocs(e, ctx), pts, true, true);
+            break;
+          }
+          case '3DFACE': {
+            const c = e.corner1 ? [e.corner1, e.corner2, e.corner3, e.corner4] : (e.vertices || []);
+            pushPl(e, ctx, c.filter(Boolean).map(p => [p.x, p.y]), true);
+            break;
+          }
+          case 'TEXT': case 'ATTRIB': {
+            const T = (typeof e.text === 'object' && e.text) ? e.text : e;
+            const s = cleanText(typeof e.text === 'string' ? e.text : T.text);
+            const ha = T.halign ?? T.horizontalJustification ?? 0, va = T.valign ?? T.verticalJustification ?? 0;
+            const p = (ha || va) && T.endPoint && (T.endPoint.x || T.endPoint.y) ? T.endPoint : (T.startPoint || T.position || { x: 0, y: 0 });
+            const r = adapter.angle(T.rotation || 0);
+            const align = ha === 1 || ha === 4 ? 'center' : ha === 2 ? 'right' : 'left';
+            const baseline = ha === 4 ? 'middle' : ['alphabetic', 'bottom', 'middle', 'top'][va] || 'alphabetic';
+            pushText(e, ocs(e, ctx), p.x, p.y, T.textHeight || T.height || 1, r, s, align, baseline);
+            break;
+          }
+          case 'MTEXT': {
+            const p = e.insertionPoint || e.position || { x: 0, y: 0 };
+            let r = 0;
+            const d = e.direction || e.directionVector;
+            if (d && (d.x || d.y)) r = Math.atan2(d.y, d.x); else r = adapter.angle(e.rotation || 0);
+            const ap_ = e.attachmentPoint || 1;
+            const col = (ap_ - 1) % 3, row = Math.floor((ap_ - 1) / 3);
+            pushText(e, ctx, p.x, p.y, e.textHeight || e.height || 1, r, cleanMText(e.text), ['left', 'center', 'right'][col], 'top', row);
+            break;
+          }
+          case 'INSERT': emitInsert(e, ctx); break;
+          case 'DIMENSION': case 'ARC_DIMENSION': case 'LARGE_RADIAL_DIMENSION': {
+            const blk = adapter.block(e.name || e.block);
+            if (blk && ctx.depth < 12) for (const s of blk.entities) emit(s, { ...ctx, layer: effLayer(e, ctx), color: resolveColor(e, ctx), depth: ctx.depth + 1 });
+            break;
+          }
+          case 'HATCH': emitHatch(e, ctx); break;
+          case 'LEADER': if (e.vertices && e.vertices.length > 1) pushPl(e, ctx, e.vertices.map(v => [v.x, v.y])); break;
+          case 'MLINE': {
+            const vs = (e.vertices || []).map(v => v.vertex || v).filter(Boolean);
+            if (vs.length > 1) pushPl(e, ctx, vs.map(v => [v.x, v.y]), !!(e.flags & 2));
+            break;
+          }
+          case 'ATTDEF': case 'VIEWPORT': case 'SEQEND': case 'VERTEX': break;
+          default: model.unsupported[t] = (model.unsupported[t] || 0) + 1;
+        }
+      } catch (err) { model.unsupported[t + ' (error)'] = (model.unsupported[t + ' (error)'] || 0) + 1; }
+    }
+    function emitPolyface(e, ctx, vs) {
+      const verts = vs.filter(v => !(v.faceA || v.faceB || v.faceC || v.faceD) || (v.flag & 64 && !(v.flag & 128)));
+      const faces = (e.vertices || []).filter(v => v.faceA || v.faceB || v.faceC);
+      for (const f of faces) {
+        const idx = [f.faceA, f.faceB, f.faceC, f.faceD].filter(i => i).map(i => Math.abs(i) - 1);
+        const pts = idx.map(i => verts[i]).filter(Boolean).map(v => [v.x, v.y]);
+        if (pts.length > 1) pushPl(e, ctx, pts, true);
+      }
+    }
+    function emitInsert(e, ctx) {
+      if (ctx.depth > 12) return;
+      const blk = adapter.block(e.name);
+      const p = e.insertionPoint || e.position || { x: 0, y: 0 };
+      const sx = e.xScale ?? 1, sy = e.yScale ?? 1, r = adapter.angle(e.rotation || 0);
+      const cols = Math.max(1, e.columnCount || 1), rows = Math.max(1, e.rowCount || 1);
+      const childCtx = { ...ocs(e, ctx), layer: effLayer(e, ctx), color: resolveColor(e, ctx), depth: ctx.depth + 1 };
+      if (blk) {
+        for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
+          const off = ap(rot(r), i * (e.columnSpacing || 0), j * (e.rowSpacing || 0));
+          const M = mul(childCtx.M, mul(tr(p.x + off[0], p.y + off[1]), mul(rot(r), mul(scl(sx, sy), tr(-(blk.base.x || 0), -(blk.base.y || 0))))));
+          for (const s of blk.entities) emit(s, { ...childCtx, M });
+        }
+      }
+      for (const a of (e.attribs || [])) emit(a, ctx); // atributos ya en coordenadas del padre
+    }
+    function emitHatch(e, ctx) {
+      const fill = e.solidFill === 1 || e.solidFill === true || /^SOLID$/i.test(e.patternName || '');
+      for (const bp of (e.boundaryPaths || e.boundaryLoops || [])) {
+        let pts = [];
+        if (bp.vertices && bp.vertices.length) pts = bulgePts(bp.vertices, true);
+        else for (const ed of (bp.edges || [])) {
+          let seg = [];
+          if (ed.type === 1) seg = [[ed.start.x, ed.start.y], [ed.end.x, ed.end.y]];
+          else if (ed.type === 2) seg = arcPts(ed.center.x, ed.center.y, ed.radius, ed.startAngle, ed.endAngle, ed.isCCW !== false);
+          else if (ed.type === 3) seg = ellipsePts(ed.center, ed.end, ed.lengthOfMinorAxis || 1, ed.startAngle, ed.endAngle, ed.isCCW !== false);
+          else if (ed.type === 4) seg = splinePts(ed.degree, ed.controlPoints, ed.knots, null, ed.fitDatum);
+          pts.push(...seg);
+        }
+        if (pts.length > 2) pushPl(e, ocs(e, ctx), pts, true, fill ? 'hatch' : false);
+      }
+    }
+    return emit;
+  }
+
+  // --- Adaptador DWG (libredwg-web) ---
+  function fromDwg(db) {
+    const model = newModel('DWG');
+    const brByName = new Map(), brByHandle = new Map();
+    for (const b of db.tables.BLOCK_RECORD.entries) { brByName.set(b.name, b); brByHandle.set(b.handle, b); }
+    for (const l of db.tables.LAYER.entries) {
+      const col = l.colorIndex > 0 && l.colorIndex < 256 ? aciColor(Math.abs(l.colorIndex)) : (l.color != null ? (l.color === 0xffffff ? FG : hex(l.color)) : FG);
+      addLayer(model, l.name, col, !(l.off || l.frozen || l.colorIndex < 0));
+    }
+    const adapter = {
+      block: name => { const b = brByName.get(name); return b ? { base: b.basePoint || { x: 0, y: 0 }, entities: b.entities || [] } : null; },
+      angle: a => a, // DWG ya en radianes
+      trueColor: e => (e.color != null && (e.colorIndex == null || e.colorIndex < 0 || e.colorIndex > 256)) ? e.color : null,
+      isPolyface: e => e.type === 'POLYFACE_MESH',
+      closed: e => e.type === 'LWPOLYLINE' ? !!(e.flag & 512) : !!(e.flag & 1)
+    };
+    const emit = makeEmitter(model, adapter);
+    // Espacios: modelo + presentaciones
+    const ms = [...brByName.values()].find(b => /^\*model_space$/i.test(b.name));
+    const layoutName = new Map();
+    for (const lo of (db.objects?.LAYOUT || [])) if (lo.paperSpaceTableId) layoutName.set(lo.paperSpaceTableId, lo.layoutName);
+    const spaces = new Map([['model', 'Modelo']]);
+    for (const e of db.entities) {
+      if ((e.type === 'ATTRIB' || e.type === 'VERTEX' || e.type === 'SEQEND') && !brByHandle.has(e.ownerBlockRecordSoftId)) continue; // ya emitido por su INSERT
+      let space = 'model';
+      const owner = brByHandle.get(e.ownerBlockRecordSoftId);
+      if (owner && /^\*paper_space/i.test(owner.name)) {
+        space = e.ownerBlockRecordSoftId;
+        if (!spaces.has(space)) spaces.set(space, layoutName.get(space) || brByHandle.get(space)?.name || 'Presentación');
+      } else if (!ms && e.isInPaperSpace) { space = 'paper'; spaces.set('paper', 'Presentación'); }
+      emit(e, { M: I, layer: null, color: null, space, depth: 0 });
+    }
+    model.spaces = [...spaces].map(([id, name]) => ({ id, name }));
+    model.units = db.header?.INSUNITS;
+    model.version = db.header?.ACADVER;
+    return finish(model);
+  }
+
+  // --- Adaptador DXF (dxf-parser) ---
+  function fromDxf(parsed) {
+    const model = newModel('DXF');
+    const layers = parsed.tables?.layer?.layers || {};
+    for (const [name, l] of Object.entries(layers)) {
+      const ci = l.colorIndex;
+      const col = ci === 7 || ci === -7 ? FG : (ci ? aciColor(Math.abs(ci)) : (l.color != null ? hex(l.color) : FG));
+      addLayer(model, name, col, l.visible !== false && !l.frozen && !(ci < 0));
+    }
+    const blocks = parsed.blocks || {};
+    const adapter = {
+      block: name => { const b = blocks[name]; return b ? { base: b.position || { x: 0, y: 0 }, entities: b.entities || [] } : null; },
+      angle: a => a * Math.PI / 180, // dxf-parser: TEXT/INSERT en grados
+      trueColor: e => (e.colorIndex == null && e.color != null) ? e.color : null,
+      isPolyface: e => !!e.isPolyfaceMesh,
+      closed: e => !!(e.shape || e.closed)
+    };
+    const emit = makeEmitter(model, adapter);
+    let hasPaper = false;
+    for (const e of parsed.entities || []) {
+      const space = e.inPaperSpace ? 'paper' : 'model';
+      if (e.inPaperSpace) hasPaper = true;
+      emit(e, { M: I, layer: null, color: null, space, depth: 0 });
+    }
+    if (hasPaper) model.spaces.push({ id: 'paper', name: 'Presentación' });
+    model.units = parsed.header?.$INSUNITS;
+    model.version = parsed.header?.$ACADVER;
+    return finish(model);
+  }
+
+  // Límites por espacio con descarte de entidades aisladas muy alejadas
+  function boundsOf(model, space) {
+    const xs = [], ys = [];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const add = (x, y) => { if (!Number.isFinite(x) || !Number.isFinite(y)) return; minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); };
+    for (const p of model.prims) {
+      if (p.space !== space) continue;
+      let cx = 0, cy = 0; const n = p.pts.length / 2;
+      for (let i = 0; i < p.pts.length; i += 2) { add(p.pts[i], p.pts[i + 1]); cx += p.pts[i]; cy += p.pts[i + 1]; }
+      xs.push(cx / n); ys.push(cy / n);
+    }
+    for (const t of model.texts) if (t.space === space) { add(t.x, t.y); xs.push(t.x); ys.push(t.y); }
+    if (!Number.isFinite(minX)) return { minX: -10, minY: -10, maxX: 10, maxY: 10 };
+    if (xs.length > 20) {
+      xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+      const q = (arr, f) => arr[Math.floor((arr.length - 1) * f)];
+      const pminX = q(xs, .03), pmaxX = q(xs, .97), pminY = q(ys, .03), pmaxY = q(ys, .97);
+      const pw = Math.max(pmaxX - pminX, pmaxY - pminY, 1e-9);
+      if (Math.max(maxX - minX, maxY - minY) > pw * 40) {
+        const m = pw * 0.15;
+        return { minX: pminX - m, maxX: pmaxX + m, minY: pminY - m, maxY: pmaxY + m, outliers: true };
+      }
+    }
+    if (minX === maxX) { minX -= 1; maxX += 1; }
+    if (minY === maxY) { minY -= 1; maxY += 1; }
+    return { minX, minY, maxX, maxY };
+  }
+  function finish(model) {
+    for (const [k, l] of model.layers) if (!l.count) model.layers.delete(k);
+    model.bounds = {};
+    for (const s of model.spaces) model.bounds[s.id] = boundsOf(model, s.id);
+    // descartar presentaciones vacías
+    model.spaces = model.spaces.filter(s => s.id === 'model' || model.prims.some(p => p.space === s.id) || model.texts.some(t => t.space === s.id));
+    return model;
+  }
+
+  // Construye lotes Path2D (coordenadas relativas al origen para precisión)
+  function buildBatches(model, space, origin) {
+    const groups = new Map();
+    for (const p of model.prims) {
+      if (p.space !== space) continue;
+      const key = p.layer + '\u0001' + p.color + '\u0001' + (p.fill ? 1 : 0);
+      let g = groups.get(key);
+      if (!g) { g = { layer: p.layer, color: p.color, fill: p.fill, path: new Path2D() }; groups.set(key, g); }
+      const a = p.pts;
+      g.path.moveTo(a[0] - origin.x, a[1] - origin.y);
+      if (a.length === 4 && a[0] === a[2] && a[1] === a[3]) g.path.lineTo(a[0] - origin.x + 1e-9, a[1] - origin.y);
+      for (let i = 2; i < a.length; i += 2) g.path.lineTo(a[i] - origin.x, a[i + 1] - origin.y);
+      if (p.closed) g.path.closePath();
+    }
+    return [...groups.values()];
+  }
+
+  const UNITS = { 0: 'Sin unidades', 1: 'Pulgadas', 2: 'Pies', 3: 'Millas', 4: 'Milímetros', 5: 'Centímetros', 6: 'Metros', 7: 'Kilómetros', 8: 'Micropulgadas', 9: 'Mils', 10: 'Yardas', 11: 'Angstroms', 12: 'Nanómetros', 13: 'Micras', 14: 'Decímetros' };
+  return { fromDwg, fromDxf, buildBatches, FG, UNITS, _test: { splinePts, bulgePts, ACI } };
+})();
+if (typeof module !== 'undefined') module.exports = CAD2D;
+
+</script>
+<script>
+// Parser MS-OLEPS (property sets) — reutilizable en navegador y node
+function guidStr(dv, o) {
+  const h = (n, l) => n.toString(16).padStart(l, '0');
+  const b = i => h(dv.getUint8(o + i), 2);
+  return `{${h(dv.getUint32(o, true), 8)}-${h(dv.getUint16(o + 4, true), 4)}-${h(dv.getUint16(o + 6, true), 4)}-${b(8)}${b(9)}-${b(10)}${b(11)}${b(12)}${b(13)}${b(14)}${b(15)}}`.toUpperCase();
+}
+function parsePropertySetStream(u8) {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  if (u8.length < 48 || dv.getUint16(0, true) !== 0xFFFE) return [];
+  const nSets = dv.getUint32(24, true);
+  const out = [];
+  for (let s = 0; s < nSets; s++) {
+    const fmtid = guidStr(dv, 28 + s * 20);
+    const off = dv.getUint32(44 + s * 20, true);
+    const count = dv.getUint32(off + 4, true);
+    let codepage = 1252;
+    const raw = [];
+    for (let i = 0; i < count; i++) {
+      const pid = dv.getUint32(off + 8 + i * 8, true);
+      const poff = off + dv.getUint32(off + 12 + i * 8, true);
+      raw.push({ pid, poff });
+      if (pid === 1) codepage = dv.getInt16(poff + 4, true) & 0xFFFF;
+    }
+    const decodeA = bytes => {
+      try { return new TextDecoder(codepage === 65001 ? 'utf-8' : codepage === 1200 ? 'utf-16le' : 'windows-1252').decode(bytes); }
+      catch { return new TextDecoder('windows-1252').decode(bytes); }
+    };
+    const props = {}; let dict = {};
+    for (const { pid, poff } of raw) {
+      if (pid === 0) { // diccionario de nombres
+        const n = dv.getUint32(poff, true); let p = poff + 4;
+        for (let k = 0; k < n; k++) {
+          const id = dv.getUint32(p, true), len = dv.getUint32(p + 4, true); p += 8;
+          let name;
+          if (codepage === 1200) { name = new TextDecoder('utf-16le').decode(u8.subarray(p, p + len * 2)); p += len * 2; p = (p + 3) & ~3; }
+          else { name = decodeA(u8.subarray(p, p + len)); p += len; }
+          dict[id] = name.replace(/\0+$/, '');
+        }
+        continue;
+      }
+      if (pid === 1 || pid >= 0x80000000) continue;
+      try { props[pid] = readValue(dv, u8, poff, decodeA); } catch { /* valor ignorado */ }
+    }
+    out.push({ fmtid, props, dict });
+  }
+  return out;
+}
+function readValue(dv, u8, p, decodeA) {
+  const vt = dv.getUint16(p, true); p += 4;
+  switch (vt) {
+    case 2: return dv.getInt16(p, true);
+    case 3: case 22: return dv.getInt32(p, true);
+    case 18: return dv.getUint16(p, true);
+    case 19: case 23: return dv.getUint32(p, true);
+    case 4: return dv.getFloat32(p, true);
+    case 5: return dv.getFloat64(p, true);
+    case 6: return Number(dv.getBigInt64(p, true)) / 10000; // CY
+    case 7: { const d = dv.getFloat64(p, true); return new Date(Date.UTC(1899, 11, 30) + d * 86400000); }
+    case 11: return dv.getInt16(p, true) !== 0;
+    case 20: return Number(dv.getBigInt64(p, true));
+    case 30: { const n = dv.getUint32(p, true); return decodeA(u8.subarray(p + 4, p + 4 + n)).replace(/\0+$/, ''); }
+    case 31: { const n = dv.getUint32(p, true); return new TextDecoder('utf-16le').decode(u8.subarray(p + 4, p + 4 + n * 2)).replace(/\0+$/, ''); }
+    case 64: { // FILETIME
+      const lo = dv.getUint32(p, true), hi = dv.getUint32(p + 4, true);
+      const ms = (hi * 4294967296 + lo) / 10000 - 11644473600000;
+      return ms > 0 ? new Date(ms) : null;
+    }
+    case 71: { // VT_CF (miniatura)
+      const size = dv.getUint32(p, true), fmt = dv.getInt32(p + 4, true);
+      return { clipboard: true, format: fmt, data: u8.slice(p + 8, p + 4 + size) };
+    }
+    default: return undefined;
+  }
+}
+const FMTID_NAMES = {
+  '{F29F85E0-4FF9-1068-AB91-08002B27B3D9}': 'Summary Information',
+  '{D5CDD502-2E9C-101B-9397-08002B2CF9AE}': 'Document Summary Information',
+  '{32853F0F-3444-11D1-9E93-0060B03C1CA6}': 'Design Tracking Properties',
+  '{D5CDD505-2E9C-101B-9397-08002B2CF9AE}': 'Inventor User Defined Properties'
+};
+const SET_TITLES = {
+  'Inventor Summary Information': 'Resumen', 'Summary Information': 'Resumen',
+  'Inventor Document Summary Information': 'Documento', 'Document Summary Information': 'Documento',
+  'Design Tracking Properties': 'Proyecto (seguimiento de diseño)',
+  'Inventor User Defined Properties': 'Personalizadas',
+  'Content Library Component Properties': 'Content Center'
+};
+const SUMMARY = { 2: 'Título', 3: 'Asunto', 4: 'Autor', 5: 'Palabras clave', 6: 'Comentarios', 8: 'Último autor', 9: 'Revisión', 11: 'Último impreso', 12: 'Creado', 13: 'Guardado', 18: 'Aplicación' };
+const DOCSUM = { 2: 'Categoría', 14: 'Responsable', 15: 'Empresa' };
+const PID_NAMES = {
+  'Inventor Summary Information': SUMMARY, 'Summary Information': SUMMARY,
+  'Inventor Document Summary Information': DOCSUM, 'Document Summary Information': DOCSUM,
+  'Design Tracking Properties': { 4: 'Fecha de creación', 5: 'Número de pieza', 7: 'Proyecto', 9: 'Centro de coste', 10: 'Comprobado por', 11: 'Fecha comprobación', 12: 'Aprobado ingeniería', 13: 'Fecha aprob. ingeniería', 17: 'Estado usuario', 20: 'Material', 23: 'Enlace catálogo', 29: 'Descripción', 30: 'Proveedor', 32: 'Subtipo de documento', 34: 'Aprobado fabricación', 35: 'Fecha aprob. fabricación', 36: 'Coste', 37: 'Norma', 40: 'Estado de diseño', 41: 'Diseñador', 42: 'Ingeniero', 43: 'Autoridad', 47: 'Revisión norma', 48: 'Fabricante', 49: 'Organismo normalización', 52: 'Designación', 55: 'Categorías', 56: 'Número de stock', 57: 'Material soldadura', 58: 'Masa (kg, interna)', 59: 'Área (cm², interna)', 60: 'Volumen (cm³, interna)', 61: 'Densidad (g/cm³)', 63: 'Ancho desarrollo', 64: 'Largo desarrollo', 65: 'Área desarrollo', 67: 'Última versión Inventor', 72: 'Apariencia' }
+};
+// Miniatura VT_CF: PNG embebido (Inventor actual) o DIB dentro de un metarchivo WMF (versiones antiguas)
+function extractThumbnail(cf) {
+  const d = cf.data;
+  for (let i = 0; i < Math.min(d.length - 8, 4096); i++) {
+    if (d[i] === 0x89 && d[i + 1] === 0x50 && d[i + 2] === 0x4E && d[i + 3] === 0x47) return toUrl(d.subarray(i), 'image/png');
+  }
+  const dv = new DataView(d.buffer, d.byteOffset, d.byteLength);
+  const dibToBmp = dib => {
+    const hdr = new DataView(dib.buffer, dib.byteOffset, dib.byteLength);
+    const hs = hdr.getUint32(0, true), bpp = hdr.getUint16(14, true), clr = hdr.getUint32(32, true);
+    const pal = bpp <= 8 ? (clr || (1 << bpp)) * 4 : (hdr.getUint32(16, true) === 3 ? 12 : 0);
+    const out = new Uint8Array(14 + dib.length), o = new DataView(out.buffer);
+    out[0] = 0x42; out[1] = 0x4D; o.setUint32(2, out.length, true); o.setUint32(10, 14 + hs + pal, true);
+    out.set(dib, 14); return toUrl(out, 'image/bmp');
+  };
+  // Buscar registro WMF META_STRETCHDIB (0x0F43) o META_DIBSTRETCHBLT (0x0B41)
+  const fmt = d.length > 4 ? dv.getUint32(0, true) : 0;
+  if (fmt === 8 && d.length > 44 && dv.getUint32(4, true) === 40) return dibToBmp(d.subarray(4)); // CF_DIB
+  if (fmt !== 3 || d.length < 40) return null; // solo CF_METAFILEPICT
+  for (let p = 12 + dv.getUint16(14, true) * 2; p + 6 < d.length;) {
+    const size = dv.getUint32(p, true) * 2, fn = dv.getUint16(p + 4, true);
+    if (fn === 0x0F43 || fn === 0x0B41) {
+      const off = p + 6 + (fn === 0x0F43 ? 22 : 20);
+      if (off + 40 < d.length && dv.getUint32(off, true) === 40) return dibToBmp(d.subarray(off, Math.min(d.length, p + size)));
+    }
+    if (size < 6) { p += 2; continue; }
+    p += size;
+  }
+  return null;
+}
+function toUrl(bytes, type) {
+  if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && URL.createObjectURL) return URL.createObjectURL(new Blob([bytes], { type }));
+  return { type, bytes };
+}
+const OLEPROPS = { parsePropertySetStream, FMTID_NAMES, PID_NAMES, SET_TITLES, extractThumbnail };
+if (typeof module !== 'undefined') module.exports = OLEPROPS;
+
+</script>
 <script>
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
+  const LIB = {
+    libredwg: 'https://cdn.jsdelivr.net/npm/@mlightcad/libredwg-web@0.8.1/dist/libredwg-web.js',
+    occt: 'https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/',
+    apsViewer: 'https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/'
+  };
+  const EXT = {
+    dxf: '2d', dwg: '2d',
+    obj: '3d', stl: '3d', ply: '3d', glb: '3d', gltf: '3d', fbx: '3d',
+    step: 'occt', stp: 'occt', iges: 'occt', igs: 'occt', brep: 'occt',
+    ipt: 'inv', iam: 'inv', idw: 'inv', ipn: 'inv', ipe: 'inv', ide: 'inv',
+    ifc: 'aps', dgn: 'aps', nwd: 'aps', rvt: 'aps', f3d: 'aps', sldprt: 'aps', sldasm: 'aps', catpart: 'aps', catproduct: 'aps', '3dm': 'aps',
+    zip: 'zip'
+  };
+  const INV_TYPE = { ipt: 'Pieza', iam: 'Ensamblaje', idw: 'Plano (dibujo)', ipn: 'Presentación', ipe: 'Documento Inventor', ide: 'iFeature' };
   const state = {
-    tabs: [], activeId: null, theme: 'claro', mode: null, dxf: null,
+    tabs: [], activeId: null, theme: 'claro', mode: null,
     scene: null, camera: null, renderer: null, controls: null, animationId: null,
     object3D: null, grid: null, raycaster: null, pointer: null,
     measureMode: false, measurePoints: [], measureObjects: [], clippingEnabled: false,
-    clippingPlane: null, currentFile: null, resizeObserver: null
+    clippingPlane: null, pool: new Map(), aps: null, loadSeq: 0
   };
 
+  // ---------- utilidades ----------
   function status(message, error = false) {
     $('status-text').textContent = message;
     $('status-text').style.color = error ? '#dc2626' : 'var(--text-muted)';
     $('tool-status').textContent = message;
     $('tool-status').classList.remove('hidden');
     clearTimeout(status._timer);
-    status._timer = setTimeout(() => $('tool-status').classList.add('hidden'), 4500);
+    status._timer = setTimeout(() => $('tool-status').classList.add('hidden'), error ? 9000 : 4500);
+  }
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  function fileExt(name) { const i = name.lastIndexOf('.'); return i < 0 ? '' : name.slice(i + 1).toLowerCase(); }
+  const baseName = p => String(p).split(/[\\/]/).pop();
+  function formatNumber(n) { return Number.isFinite(n) ? n.toLocaleString('es-ES', { maximumFractionDigits: 3 }) : '—'; }
+  function fmtVal(v) {
+    if (v instanceof Date) return isNaN(v) ? '—' : v.toLocaleString('es-ES');
+    if (typeof v === 'number') return formatNumber(v);
+    if (typeof v === 'boolean') return v ? 'Sí' : 'No';
+    return String(v ?? '');
+  }
+  function fmtSize(b) { return b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} kB`; }
+  async function sha256Hex(buf) {
+    const h = await crypto.subtle.digest('SHA-256', buf);
+    return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  function loadScript(src) {
+    return new Promise((res, rej) => {
+      if ([...document.scripts].some(s => s.src === src)) return res();
+      const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error(`No se pudo cargar ${src}`)); document.head.append(s);
+    });
+  }
+  function loadCss(href) {
+    if ([...document.styleSheets].some(s => s.href === href)) return;
+    const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href; document.head.append(l);
   }
 
-  function escapeText(value) { return String(value ?? ''); }
+  // ---------- propiedades ----------
+  function showGroups(groups) {
+    const root = $('properties-container'); root.replaceChildren();
+    for (const g of groups) {
+      if (!g || !g.rows) continue;
+      const entries = Object.entries(g.rows).filter(([, v]) => v !== undefined && v !== null && v !== '');
+      if (!entries.length) continue;
+      if (g.title) root.append(el('div', 'group-title', g.title));
+      for (const [k, v] of entries) {
+        const row = el('div', 'border-b pb-2 mb-2'); row.style.borderColor = 'var(--border-color)';
+        row.append(el('div', 'font-semibold mb-1', k), el('div', 'break-words', fmtVal(v)));
+        root.append(row);
+      }
+    }
+  }
+  const showProperties = obj => showGroups([{ rows: obj }]);
+
   function setTheme(theme) {
     state.theme = theme;
     document.body.className = `theme-${theme} h-screen flex flex-col overflow-hidden text-sm`;
     if (state.scene) state.scene.background = new THREE.Color(theme === 'oscuro' ? 0x020617 : theme === 'medio' ? 0xcbd5e1 : 0xf1f5f9);
     if (state.mode === '2d') draw2D();
+    if (state.mode === 'aps' && state.aps?.viewer) apsTheme();
     if (state.renderer && state.scene && state.camera) state.renderer.render(state.scene, state.camera);
+    try { localStorage.setItem('visorcad.theme', theme); } catch {}
   }
 
-  function fileExt(name) {
-    const i = name.lastIndexOf('.');
-    return i < 0 ? '' : name.slice(i + 1).toLowerCase();
-  }
-  function openFiles(files) {
-    [...files].forEach(file => {
-      const ext = fileExt(file.name);
-      const tab = { id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`, name: file.name, ext, file, mode: null, data: null };
-      state.tabs.push(tab);
-      renderTabs();
-      switchTab(tab.id);
-    });
+  // ---------- pestañas ----------
+  function addToPool(files) { for (const f of files) state.pool.set(f.name.toLowerCase(), f); }
+  async function openFiles(files, { fromFolder = false } = {}) {
+    files = [...files].filter(f => f.size > 0);
+    if (!files.length) return;
+    addToPool(files);
+    const isInv = f => ['ipt', 'iam', 'idw', 'ipn', 'ipe', 'ide'].includes(fileExt(f.name));
+    const docs = files.filter(f => ['iam', 'idw', 'ipn'].includes(fileExt(f.name)));
+    let toOpen;
+    if (docs.length) {
+      // Documentos raíz: ensamblajes/planos que no están referenciados por otro documento cargado
+      status('Analizando referencias de Inventor…');
+      const referenced = new Set();
+      for (const f of docs.slice(0, 80)) {
+        try { readInventorOle(new Uint8Array(await f.arrayBuffer())).refs.forEach(r => { const b = baseName(r).toLowerCase(); if (b !== f.name.toLowerCase()) referenced.add(b); }); } catch {}
+      }
+      const order = { idw: 0, iam: 1, ipn: 2 };
+      const roots = docs.filter(f => !referenced.has(f.name.toLowerCase())).sort((a, b) => order[fileExt(a.name)] - order[fileExt(b.name)] || b.size - a.size);
+      toOpen = [...(roots.length ? roots : docs).slice(0, 8), ...files.filter(f => !isInv(f) && EXT[fileExt(f.name)]).slice(0, fromFolder ? 0 : 8)];
+    } else toOpen = (fromFolder || files.length > 12) ? files.filter(f => EXT[fileExt(f.name)]).slice(0, 8) : files;
+    if (!toOpen.length) { status('No hay archivos compatibles en la selección.', true); return; }
+    let last = null;
+    for (const file of toOpen) {
+      last = { id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`, name: file.name, ext: fileExt(file.name), file, mode: null, data: null };
+      state.tabs.push(last);
+    }
+    renderTabs(); switchTab(last.id);
+    if (toOpen.length < files.length) setTimeout(() => status(`${files.length} archivos disponibles; abiertos ${toOpen.length} documentos principales. El resto se usa como referencias al convertir.`), 1500);
   }
   function renderTabs() {
     const bar = $('tabs-bar');
     bar.replaceChildren();
     bar.classList.toggle('hidden', !state.tabs.length);
     for (const tab of state.tabs) {
-      const wrap = document.createElement('div');
-      wrap.className = `flex items-center gap-2 px-3 py-1 rounded-t border-t-2 text-xs cursor-pointer ${tab.id === state.activeId ? 'bg-blue-50 border-blue-600 text-blue-900' : 'border-transparent'}`;
-      const name = document.createElement('span');
-      name.textContent = tab.name;
-      name.title = tab.name;
-      const close = document.createElement('button');
-      close.className = 'ml-1 hover:text-red-600';
-      close.textContent = '×';
-      close.title = 'Cerrar archivo';
+      const wrap = el('div', `flex items-center gap-2 px-3 py-1 rounded-t border-t-2 text-xs cursor-pointer ${tab.id === state.activeId ? 'bg-blue-50 border-blue-600 text-blue-900' : 'border-transparent'}`);
+      const name = el('span', '', tab.name); name.title = tab.name;
+      const close = el('button', 'ml-1 hover:text-red-600', '×'); close.title = 'Cerrar archivo';
       close.addEventListener('click', event => { event.stopPropagation(); closeTab(tab.id); });
-      wrap.addEventListener('click', () => switchTab(tab.id));
+      wrap.addEventListener('click', () => { if (tab.id !== state.activeId) switchTab(tab.id); });
       wrap.append(name, close);
       bar.append(wrap);
     }
+  }
+  function showPanels(on) {
+    $('dropzone').classList.toggle('hidden', on);
+    for (const id of ['sidebar-left', 'sidebar-right']) { $(id).classList.toggle('hidden', !on); $(id).classList.toggle('flex', on); }
   }
   function switchTab(id) {
     const tab = state.tabs.find(t => t.id === id);
     if (!tab) return;
     state.activeId = id;
-    state.currentFile = tab.file;
     renderTabs();
-    $('dropzone').classList.add('hidden');
-    $('sidebar-left').classList.remove('hidden');
-    $('sidebar-left').classList.add('flex');
-    $('sidebar-right').classList.remove('hidden');
-    $('sidebar-right').classList.add('flex');
+    showPanels(true);
     resetView();
+    const seq = ++state.loadSeq;
     status(`Cargando ${tab.name}…`);
-    loadTab(tab).catch(err => {
+    loadTab(tab, seq).catch(err => {
+      if (seq !== state.loadSeq) return;
       console.error(err);
       status(`No se pudo abrir ${tab.name}: ${err.message || err}`, true);
-      showProperties({ Archivo: tab.name, Formato: tab.ext.toUpperCase(), Estado: 'Error de lectura', Detalle: err.message || String(err) });
+      showErrorView(tab, err);
     });
   }
   function closeTab(id) {
@@ -186,140 +856,128 @@
       resetView();
       if (state.tabs.length) switchTab(state.tabs[Math.max(0, idx - 1)].id);
       else {
-        $('dropzone').classList.remove('hidden');
-        $('sidebar-left').classList.add('hidden');
-        $('sidebar-right').classList.add('hidden');
-        $('canvas-2d').classList.add('hidden');
-        $('canvas-3d').classList.add('hidden');
-        $('tree-container').replaceChildren();
-        $('properties-container').replaceChildren();
+        showPanels(false);
+        $('tree-container').replaceChildren(); $('properties-container').replaceChildren();
         status('Listo. Abre un archivo compatible.');
       }
     }
     renderTabs();
   }
-  function resetView() {
-    state.measureMode = false; state.measurePoints = []; clearMeasures();
-    $('canvas-2d').classList.add('hidden');
-    $('canvas-3d').classList.add('hidden');
-    $('measure-label').classList.add('hidden');
-    $('btn-measure').classList.remove('active');
-  }
-  async function loadTab(tab) {
-    if (tab.ext === 'dxf') {
-      if (!window.DxfParser) throw new Error('No se ha cargado la biblioteca DXF. Comprueba la conexión o sirve la biblioteca localmente.');
-      const text = await tab.file.text();
-      const parser = new window.DxfParser();
-      const parsed = parser.parseSync(text);
-      if (!parsed || !parsed.entities) throw new Error('El archivo DXF no contiene entidades legibles.');
-      tab.data = parsed; tab.mode = '2d';
-      init2D(tab);
-      populateDxfMetadata(tab);
-      status(`DXF cargado: ${parsed.entities.length} entidades.`);
-      return;
-    }
-    if (['obj','stl','ply','glb','gltf','fbx'].includes(tab.ext)) {
-      await load3DFile(tab);
-      return;
-    }
-    if (['dgn','dwg','ifc','step','stp'].includes(tab.ext)) {
-      const advice = {
-        dgn: 'DGN necesita un lector/conversor especializado compatible con la versión del archivo (V7/V8).',
-        dwg: 'DWG necesita un lector/conversor CAD compatible.',
-        ifc: 'IFC necesita integrar un lector IFC, por ejemplo web-ifc/IFC.js.',
-        step: 'STEP necesita un lector STEP basado en Open CASCADE u otro SDK compatible.',
-        stp: 'STP necesita un lector STEP basado en Open CASCADE u otro SDK compatible.'
-      }[tab.ext];
-      throw new Error(`${advice} Este HTML no puede garantizar la lectura de ese formato sin integrar y configurar ese motor. Para un visor profesional se puede añadir un servicio de conversión o SDK.`);
-    }
-    if (tab.ext === 'json') {
-      const data = JSON.parse(await tab.file.text());
-      throw new Error('JSON recibido, pero no hay un esquema geométrico definido para interpretarlo. Define el formato de datos antes de visualizarlo.');
-    }
-    throw new Error(`Formato .${tab.ext || '(sin extensión)'} no soportado.`);
+  function setTree(title) { $('tree-title').textContent = title; $('tree-container').replaceChildren(); return $('tree-container'); }
+
+  async function loadTab(tab, seq) {
+    const kind = EXT[tab.ext];
+    if (tab.ext === 'dxf') return loadDxf(tab, seq);
+    if (tab.ext === 'dwg') return loadDwg(tab, seq);
+    if (kind === '3d') return load3DFile(tab);
+    if (kind === 'occt') return loadOcct(tab, seq);
+    if (kind === 'inv') return loadInventor(tab, seq);
+    if (kind === 'zip') return loadZip(tab, seq);
+    if (kind === 'aps') return showApsOnlyView(tab, `Este formato (.${tab.ext.toUpperCase()}) no tiene lector libre fiable en el navegador; se convierte con Autodesk APS.`);
+    if (tab.ext === 'json') throw new Error('JSON recibido, pero no hay un esquema geométrico definido para interpretarlo.');
+    return showApsOnlyView(tab, `Formato .${tab.ext || '(sin extensión)'} sin lector local. Puedes intentar la conversión con Autodesk APS si el formato está admitido por Model Derivative.`);
   }
 
-  async function load3DFile(tab) {
-    const buffer = await tab.file.arrayBuffer();
-    init3D();
-    state.mode = '3d';
-    const done = object => {
-      if (!object) throw new Error('El lector no ha devuelto geometría.');
-      state.object3D = object;
-      state.scene.add(object);
-      fit3D();
-      const box = new THREE.Box3().setFromObject(object);
-      const size = box.getSize(new THREE.Vector3());
-      $('tree-container').textContent = `Modelo cargado: ${tab.name}`;
-      showProperties({
-        Archivo: tab.name,
-        Formato: tab.ext.toUpperCase(),
-        Estado: 'Geometría cargada',
-        'Extensión X': formatNumber(size.x),
-        'Extensión Y': formatNumber(size.y),
-        'Extensión Z': formatNumber(size.z),
-        Unidades: 'No determinadas automáticamente; verificar en el archivo de origen'
-      });
-      status(`${tab.ext.toUpperCase()} cargado. Verifica unidades, escala y orientación.`);
-    };
-    try {
-      if (tab.ext === 'obj') {
-        const text = new TextDecoder().decode(buffer);
-        done(new THREE.OBJLoader().parse(text));
-      } else if (tab.ext === 'stl') {
-        const geometry = new THREE.STLLoader().parse(buffer);
-        geometry.computeVertexNormals();
-        done(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({color:0x94a3b8, metalness:.1, roughness:.7, side:THREE.DoubleSide})));
-      } else if (tab.ext === 'ply') {
-        const geometry = new THREE.PLYLoader().parse(buffer);
-        geometry.computeVertexNormals();
-        const material = new THREE.MeshStandardMaterial({color:0x94a3b8, vertexColors: !!geometry.getAttribute('color'), side:THREE.DoubleSide});
-        done(new THREE.Mesh(geometry, material));
-      } else if (tab.ext === 'glb' || tab.ext === 'gltf') {
-        const loader = new THREE.GLTFLoader();
-        const basePath = URL.createObjectURL(new Blob([buffer]));
-        loader.parse(buffer, '', gltf => {
-          URL.revokeObjectURL(basePath);
-          done(gltf.scene || gltf.scenes[0]);
-        }, error => {
-          URL.revokeObjectURL(basePath);
-          status(`Error al leer ${tab.name}: ${error.message || error}`, true);
-        });
-      } else if (tab.ext === 'fbx') {
-        done(new THREE.FBXLoader().parse(buffer, ''));
-      }
-    } catch (err) {
-      destroy3D();
-      throw new Error(`No se pudo interpretar el archivo ${tab.ext.toUpperCase()}: ${err.message || err}`);
-    }
+  // =====================================================================
+  //  2D: DXF / DWG
+  // =====================================================================
+  let canvas2d, ctx2d, ro2d;
+  const view2d = { scale: 1, ox: 0, oy: 0, origin: { x: 0, y: 0 }, model: null, space: 'model', batches: [], dragging: false, lastX: 0, lastY: 0, raf: 0 };
+
+  async function loadDxf(tab, seq) {
+    if (!window.DxfParser) throw new Error('No se ha cargado la biblioteca DXF (dxf-parser). Comprueba la conexión.');
+    const Parser = window.DxfParser.default || window.DxfParser;
+    const parsed = new Parser().parseSync(await tab.file.text());
+    if (!parsed || !parsed.entities) throw new Error('El archivo DXF no contiene entidades legibles.');
+    if (seq !== state.loadSeq) return;
+    open2D(tab, CAD2D.fromDxf(parsed));
   }
 
-  let canvas2d, ctx2d, view2d = { scale: 1, ox: 0, oy: 0, bounds: null, dragging: false, lastX: 0, lastY: 0, measureStart: null, entities: [] };
-  function init2D(tab) {
+  // LibreDWG (GPL-3.0) en un Web Worker: aísla el WASM y no bloquea la interfaz
+  let dwgWorker = null;
+  function dwgWorkerCode() {
+    return `import { LibreDwg, Dwg_File_Type } from '${LIB.libredwg}';
+let lib = null;
+self.onmessage = async (ev) => {
+  try {
+    if (!lib) { self.postMessage({ progress: 'Cargando motor LibreDWG (≈11 MB, solo la primera vez)…' }); lib = await LibreDwg.create(); }
+    self.postMessage({ progress: 'Interpretando DWG…' });
+    const ptr = lib.dwg_read_data(ev.data, Dwg_File_Type.DWG);
+    if (!ptr) throw new Error('LibreDWG no pudo leer el archivo (versión o contenido no soportado).');
+    const db = lib.convert(ptr);
+    try { lib.dwg_free(ptr); } catch (e) {}
+    self.postMessage({ ok: true, db });
+  } catch (e) { self.postMessage({ ok: false, error: String((e && e.message) || e) }); }
+};`;
+  }
+  function parseDwg(buffer) {
+    return new Promise((resolve, reject) => {
+      if (!dwgWorker) dwgWorker = new Worker(URL.createObjectURL(new Blob([dwgWorkerCode()], { type: 'text/javascript' })), { type: 'module' });
+      const w = dwgWorker;
+      const timer = setTimeout(() => { kill(); reject(new Error('Tiempo de lectura DWG agotado.')); }, 180000);
+      const kill = () => { clearTimeout(timer); w.terminate(); if (dwgWorker === w) dwgWorker = null; };
+      w.onmessage = ev => {
+        if (ev.data.progress) { status(ev.data.progress); return; }
+        clearTimeout(timer);
+        if (ev.data.ok) resolve(ev.data.db);
+        else { kill(); reject(new Error(ev.data.error)); } // un fallo WASM puede dejar el módulo inestable
+      };
+      w.onerror = ev => { kill(); reject(new Error(ev.message || 'Error al cargar el motor DWG (¿sin conexión a cdn.jsdelivr.net?).')); };
+      w.postMessage(buffer, [buffer]);
+    });
+  }
+  async function loadDwg(tab, seq) {
+    const buf = await tab.file.arrayBuffer();
+    const sig = new TextDecoder().decode(new Uint8Array(buf, 0, 6));
+    const ver = { AC1012: 'R13', AC1014: 'R14', AC1015: '2000', AC1018: '2004', AC1021: '2007', AC1024: '2010', AC1027: '2013', AC1032: '2018' }[sig] || sig;
+    let db;
+    try { db = await parseDwg(buf); }
+    catch (err) {
+      err.apsHint = true;
+      err.message = `LibreDWG no pudo interpretar este DWG (${ver}): ${err.message}`;
+      throw err;
+    }
+    if (seq !== state.loadSeq) return;
+    const model = CAD2D.fromDwg(db);
+    model.versionLabel = `AutoCAD ${ver} (${sig})`;
+    if (!model.prims.length && !model.texts.length) {
+      const e = new Error('El DWG se leyó pero no contiene entidades 2D representables (puede ser solo 3D/ACIS o usar objetos no soportados).'); e.apsHint = true; throw e;
+    }
+    open2D(tab, model);
+  }
+
+  function open2D(tab, model) {
+    tab.data = model; tab.mode = '2d';
     destroy3D();
     state.mode = '2d';
     canvas2d = $('canvas-2d'); ctx2d = canvas2d.getContext('2d');
     canvas2d.classList.remove('hidden');
-    const bounds = getDxfBounds(tab.data.entities);
-    view2d.entities = tab.data.entities;
-    view2d.bounds = bounds;
-    resize2D();
-    fit2D();
+    view2d.model = model;
+    if (!ro2d) { ro2d = new ResizeObserver(() => { if (state.mode === '2d') resize2D(); }); ro2d.observe($('viewport-container')); }
     canvas2d.onpointerdown = on2DPointerDown;
     canvas2d.onpointermove = on2DPointerMove;
     canvas2d.onpointerup = () => { view2d.dragging = false; };
     canvas2d.onwheel = e => {
       e.preventDefault();
-      const rect = canvas2d.getBoundingClientRect();
-      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-      const before = screenToWorld(mx, my);
-      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      view2d.scale = Math.max(1e-5, Math.min(1e7, view2d.scale * factor));
+      const rect = canvas2d.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const before = screenToWorld(mx, my), factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      view2d.scale = Math.max(1e-9, Math.min(1e9, view2d.scale * factor));
       const after = worldToScreen(before.x, before.y);
       view2d.ox += mx - after.x; view2d.oy += my - after.y;
-      draw2D();
+      request2D();
     };
-    new ResizeObserver(resize2D).observe($('viewport-container'));
+    setSpace(model.spaces[0].id);
+    populate2DTree(tab);
+    const total = model.prims.length + model.texts.length;
+    status(`${model.source} cargado: ${model.stats.entities} entidades → ${total} elementos dibujados.`);
+  }
+  function setSpace(space) {
+    const m = view2d.model;
+    view2d.space = space;
+    const b = m.bounds[space];
+    view2d.origin = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
+    view2d.batches = CAD2D.buildBatches(m, space, view2d.origin);
+    resize2D(); fit2D();
   }
   function resize2D() {
     if (!canvas2d || state.mode !== '2d') return;
@@ -328,272 +986,700 @@
     canvas2d.width = Math.max(1, Math.floor(rect.width * dpr));
     canvas2d.height = Math.max(1, Math.floor(rect.height * dpr));
     canvas2d.style.width = `${rect.width}px`; canvas2d.style.height = `${rect.height}px`;
-    ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
     draw2D();
-  }
-  function getDxfBounds(entities) {
-    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-    const add = p => { if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) { minX=Math.min(minX,p.x); minY=Math.min(minY,p.y); maxX=Math.max(maxX,p.x); maxY=Math.max(maxY,p.y); } };
-    for (const e of entities) {
-      (e.vertices || []).forEach(v => add(v));
-      add(e.startPoint); add(e.endPoint); add(e.center);
-      if (e.position) add(e.position);
-      if (e.controlPoints) e.controlPoints.forEach(add);
-    }
-    if (!Number.isFinite(minX)) return {minX:-10,minY:-10,maxX:10,maxY:10};
-    if (minX === maxX) { minX -= 1; maxX += 1; }
-    if (minY === maxY) { minY -= 1; maxY += 1; }
-    return {minX,minY,maxX,maxY};
   }
   function fit2D() {
-    if (!view2d.bounds || !canvas2d) return;
-    const w = $('viewport-container').clientWidth, h = $('viewport-container').clientHeight, b = view2d.bounds;
-    const sx = (w - 60) / (b.maxX - b.minX), sy = (h - 60) / (b.maxY - b.minY);
-    view2d.scale = Math.max(1e-5, Math.min(sx, sy));
-    view2d.ox = (w - (b.minX + b.maxX) * view2d.scale) / 2;
-    view2d.oy = (h + (b.minY + b.maxY) * view2d.scale) / 2;
+    if (!view2d.model || !canvas2d) return;
+    const w = $('viewport-container').clientWidth, h = $('viewport-container').clientHeight, b = view2d.model.bounds[view2d.space];
+    view2d.scale = Math.max(1e-9, Math.min((w - 60) / (b.maxX - b.minX), (h - 60) / (b.maxY - b.minY)));
+    view2d.ox = w / 2 + ((b.minX + b.maxX) / 2 - view2d.origin.x) * -view2d.scale;
+    view2d.oy = h / 2 - ((b.minY + b.maxY) / 2 - view2d.origin.y) * -view2d.scale;
     draw2D();
   }
-  function worldToScreen(x,y) { return {x: x*view2d.scale + view2d.ox, y: -y*view2d.scale + view2d.oy}; }
-  function screenToWorld(x,y) { return {x:(x-view2d.ox)/view2d.scale, y:-(y-view2d.oy)/view2d.scale}; }
+  function worldToScreen(x, y) { return { x: (x - view2d.origin.x) * view2d.scale + view2d.ox, y: -(y - view2d.origin.y) * view2d.scale + view2d.oy }; }
+  function screenToWorld(x, y) { return { x: (x - view2d.ox) / view2d.scale + view2d.origin.x, y: -(y - view2d.oy) / view2d.scale + view2d.origin.y }; }
+  function request2D() { if (!view2d.raf) view2d.raf = requestAnimationFrame(() => { view2d.raf = 0; draw2D(); }); }
+  const colorCache = new Map();
+  function displayColor(c) {
+    const dark = state.theme === 'oscuro';
+    if (c === CAD2D.FG) return dark ? '#e5e7eb' : '#111827';
+    if (dark) return c;
+    const key = c + state.theme;
+    if (colorCache.has(key)) return colorCache.get(key);
+    const n = parseInt(c.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    let out = c;
+    if (lum > 0.62) { const k = 0.62 / lum * 0.85; out = '#' + [r, g, b].map(v => Math.round(v * k).toString(16).padStart(2, '0')).join(''); }
+    colorCache.set(key, out); return out;
+  }
   function draw2D() {
-    if (!ctx2d || state.mode !== '2d') return;
-    const w = $('viewport-container').clientWidth, h = $('viewport-container').clientHeight;
-    ctx2d.clearRect(0,0,w,h);
+    if (!ctx2d || state.mode !== '2d' || !view2d.model) return;
+    const dpr = canvas2d.width / Math.max(1, canvas2d.clientWidth);
+    const w = canvas2d.clientWidth, h = canvas2d.clientHeight, s = view2d.scale, m = view2d.model;
+    ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx2d.fillStyle = state.theme === 'oscuro' ? '#020617' : state.theme === 'medio' ? '#cbd5e1' : '#f8fafc';
-    ctx2d.fillRect(0,0,w,h);
-    for (const e of view2d.entities) drawDxfEntity(e);
-    if (state.measurePoints.length) {
-      ctx2d.strokeStyle='#ef4444'; ctx2d.fillStyle='#ef4444'; ctx2d.lineWidth=1.5;
-      const pts=state.measurePoints.map(p=>worldToScreen(p.x,p.y));
-      if (pts.length===2) { ctx2d.beginPath(); ctx2d.moveTo(pts[0].x,pts[0].y); ctx2d.lineTo(pts[1].x,pts[1].y); ctx2d.stroke(); }
-      pts.forEach(p=>{ctx2d.beginPath();ctx2d.arc(p.x,p.y,4,0,Math.PI*2);ctx2d.fill();});
+    ctx2d.fillRect(0, 0, w, h);
+    ctx2d.setTransform(dpr * s, 0, 0, -dpr * s, dpr * view2d.ox, dpr * view2d.oy);
+    ctx2d.lineWidth = 1 / s; ctx2d.lineJoin = 'round'; ctx2d.lineCap = 'round';
+    for (const g of view2d.batches) {
+      if (!m.layers.get(g.layer)?.visible) continue;
+      const col = displayColor(g.color);
+      if (g.fill) { ctx2d.fillStyle = col; ctx2d.globalAlpha = g.fill === 'hatch' ? 0.35 : 1; ctx2d.fill(g.path, 'evenodd'); ctx2d.globalAlpha = 1; }
+      ctx2d.strokeStyle = col; ctx2d.stroke(g.path);
+    }
+    ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const many = m.texts.length > 4000;
+    for (const t of m.texts) {
+      if (t.space !== view2d.space || !m.layers.get(t.layer)?.visible) continue;
+      const px = t.h * s;
+      if (px < (many ? 4 : 1.6) || px > 4000) continue;
+      const p = worldToScreen(t.x, t.y);
+      if (p.x < -2000 || p.y < -2000 || p.x > w + 2000 || p.y > h + 2000) continue;
+      ctx2d.save(); ctx2d.translate(p.x, p.y); ctx2d.rotate(-t.rot);
+      ctx2d.fillStyle = displayColor(t.color); ctx2d.font = `${px}px "Segoe UI", Arial, sans-serif`; ctx2d.textAlign = t.align;
+      const lines = t.text.split('\n'), lh = px * 1.4;
+      if (t.mtextRow >= 0) {
+        ctx2d.textBaseline = 'top';
+        const y0 = t.mtextRow === 1 ? -lines.length * lh / 2 : t.mtextRow === 2 ? -lines.length * lh : 0;
+        lines.forEach((l, i) => ctx2d.fillText(l, 0, y0 + i * lh));
+      } else { ctx2d.textBaseline = t.baseline; ctx2d.fillText(lines[0], 0, 0); }
+      ctx2d.restore();
+    }
+    if (state.measurePoints.length && state.mode === '2d') {
+      ctx2d.strokeStyle = '#ef4444'; ctx2d.fillStyle = '#ef4444'; ctx2d.lineWidth = 1.5;
+      const pts = state.measurePoints.map(p => worldToScreen(p.x, p.y));
+      if (pts.length === 2) { ctx2d.beginPath(); ctx2d.moveTo(pts[0].x, pts[0].y); ctx2d.lineTo(pts[1].x, pts[1].y); ctx2d.stroke(); }
+      pts.forEach(p => { ctx2d.beginPath(); ctx2d.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx2d.fill(); });
     }
   }
-  function drawDxfEntity(e) {
-    const col = e.color ? `#${Number(e.color).toString(16).padStart(6,'0').slice(-6)}` : (state.theme === 'oscuro' ? '#e2e8f0' : '#334155');
-    ctx2d.strokeStyle = col; ctx2d.fillStyle = col; ctx2d.lineWidth = 1;
-    const pt = p => worldToScreen(p.x,p.y);
-    const line = (a,b) => { if (!a || !b) return; const A=pt(a), B=pt(b); ctx2d.beginPath();ctx2d.moveTo(A.x,A.y);ctx2d.lineTo(B.x,B.y);ctx2d.stroke(); };
-    if (e.type === 'LINE') line(e.startPoint,e.endPoint);
-    else if (e.type === 'LWPOLYLINE' || e.type === 'POLYLINE') {
-      const vs=e.vertices||[]; if (!vs.length) return;
-      ctx2d.beginPath(); const p0=pt(vs[0]);ctx2d.moveTo(p0.x,p0.y);
-      for(let i=1;i<vs.length;i++){const p=pt(vs[i]);ctx2d.lineTo(p.x,p.y);}
-      if (e.shape || e.closed) ctx2d.closePath(); ctx2d.stroke();
-    } else if (e.type === 'CIRCLE' && e.center) {
-      const c=pt(e.center); ctx2d.beginPath();ctx2d.arc(c.x,c.y,Math.abs(e.radius*view2d.scale),0,Math.PI*2);ctx2d.stroke();
-    } else if (e.type === 'ARC' && e.center) {
-      const c=pt(e.center), r=Math.abs(e.radius*view2d.scale);
-      ctx2d.beginPath(); ctx2d.arc(c.x,c.y,r,-e.endAngle,-e.startAngle); ctx2d.stroke();
-    } else if (e.type === 'POINT' && e.position) {
-      const p=pt(e.position);ctx2d.beginPath();ctx2d.arc(p.x,p.y,2,0,Math.PI*2);ctx2d.fill();
-    } else if (e.type === 'SOLID' || e.type === 'TRACE' || e.type === '3DFACE') {
-      const vs=e.vertices||[]; if(vs.length){ctx2d.beginPath();const p=pt(vs[0]);ctx2d.moveTo(p.x,p.y);vs.slice(1).forEach(v=>{const q=pt(v);ctx2d.lineTo(q.x,q.y);});ctx2d.closePath();ctx2d.stroke();}
-    } else if (e.type === 'TEXT' || e.type === 'MTEXT') {
-      const p=pt(e.startPoint||e.position||{x:0,y:0}); ctx2d.font=`${Math.max(8,Math.min(32,(e.textHeight||e.height||10)*view2d.scale))}px sans-serif`; ctx2d.fillText(String(e.text||e.string||''),p.x,p.y);
-    } else if (e.type === 'ELLIPSE' && e.center) {
-      const c=pt(e.center), major=e.majorAxisEndPoint||{x:e.radius||1,y:0}; const rx=Math.hypot(major.x,major.y)*view2d.scale;
-      ctx2d.beginPath();ctx2d.ellipse(c.x,c.y,rx,Math.max(1,rx*(e.axisRatio||1)),0,0,Math.PI*2);ctx2d.stroke();
+  function snap2D(sx, sy) { // imán a vértices a menos de 10 px
+    const m = view2d.model, w = screenToWorld(sx, sy), tol = 10 / view2d.scale;
+    let best = null, bd = tol * tol;
+    for (const p of m.prims) {
+      if (p.space !== view2d.space || !m.layers.get(p.layer)?.visible) continue;
+      const a = p.pts;
+      for (let i = 0; i < a.length; i += 2) { const dx = a[i] - w.x, dy = a[i + 1] - w.y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = { x: a[i], y: a[i + 1] }; } }
     }
+    return best || w;
   }
   function on2DPointerDown(e) {
-    const rect=canvas2d.getBoundingClientRect(), x=e.clientX-rect.left,y=e.clientY-rect.top;
-    if (state.measureMode) {
-      const p=screenToWorld(x,y); state.measurePoints.push(p);
-      if (state.measurePoints.length===2) {
-        const [a,b]=state.measurePoints, d=Math.hypot(b.x-a.x,b.y-a.y);
-        $('measure-label').textContent=`Distancia 2D: ${formatNumber(d)} unidades de dibujo`;
+    const rect = canvas2d.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+    if (state.measureMode && e.button === 0) {
+      state.measurePoints.push(snap2D(x, y));
+      if (state.measurePoints.length === 2) {
+        const [a, b] = state.measurePoints, d = Math.hypot(b.x - a.x, b.y - a.y);
+        const u = CAD2D.UNITS[view2d.model.units] || 'unidades de dibujo';
+        $('measure-label').textContent = `Distancia: ${formatNumber(d)} ${u} · ΔX ${formatNumber(b.x - a.x)} · ΔY ${formatNumber(b.y - a.y)}`;
         $('measure-label').classList.remove('hidden');
-        status(`Medición 2D: ${formatNumber(d)} unidades de dibujo. Comprueba las unidades del archivo.`);
-        state.measureMode=false; $('btn-measure').classList.remove('active');
+        status(`Medición 2D: ${formatNumber(d)} (${u}).`);
+        state.measureMode = false; $('btn-measure').classList.remove('active');
       }
       draw2D(); return;
     }
-    view2d.dragging=true; view2d.lastX=x; view2d.lastY=y; canvas2d.setPointerCapture(e.pointerId);
+    view2d.dragging = true; view2d.lastX = x; view2d.lastY = y; canvas2d.setPointerCapture(e.pointerId);
   }
   function on2DPointerMove(e) {
-    const rect=canvas2d.getBoundingClientRect(), x=e.clientX-rect.left,y=e.clientY-rect.top;
-    const p=screenToWorld(x,y); $('coords-text').textContent=`X: ${formatNumber(p.x)} Y: ${formatNumber(p.y)} Z: 0`;
-    if(view2d.dragging) {view2d.ox+=x-view2d.lastX;view2d.oy+=y-view2d.lastY;view2d.lastX=x;view2d.lastY=y;draw2D();}
+    const rect = canvas2d.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const p = screenToWorld(x, y); $('coords-text').textContent = `X: ${formatNumber(p.x)} Y: ${formatNumber(p.y)} Z: 0`;
+    if (view2d.dragging) { view2d.ox += x - view2d.lastX; view2d.oy += y - view2d.lastY; view2d.lastX = x; view2d.lastY = y; request2D(); }
   }
-  function formatNumber(n) { return Number.isFinite(n) ? n.toLocaleString('es-ES',{maximumFractionDigits:3}) : '—'; }
-
-  function populateDxfMetadata(tab) {
-    const layers = tab.data.tables?.layer?.layers || {};
-    const layerNames = Object.keys(layers);
-    const counts = {};
-    tab.data.entities.forEach(e => { const l=e.layer || '0'; counts[l]=(counts[l]||0)+1; });
-    const tree=$('tree-container'); tree.replaceChildren();
-    if (!layerNames.length) layerNames.push(...Object.keys(counts));
-    layerNames.forEach(name => {
-      const row=document.createElement('label'); row.className='tree-item flex items-center gap-2';
-      const cb=document.createElement('input'); cb.type='checkbox';cb.checked=true;cb.addEventListener('change',()=>{tab.data.entities.forEach(e=>{if((e.layer||'0')===name)e._hidden=!cb.checked;});view2d.entities=tab.data.entities.filter(e=>!e._hidden);draw2D();});
-      const text=document.createElement('span');text.textContent=`${name} (${counts[name]||0})`;
-      row.append(cb,text);tree.append(row);
+  function populate2DTree(tab) {
+    const m = tab.data, tree = setTree('Capas');
+    if (m.spaces.length > 1) {
+      const sel = el('select', 'field mb-2');
+      m.spaces.forEach(s => { const o = el('option', '', s.name); o.value = s.id; sel.append(o); });
+      sel.value = view2d.space;
+      sel.addEventListener('change', () => setSpace(sel.value));
+      tree.append(el('div', 'group-title', 'Espacio'), sel);
+    }
+    const bar = el('div', 'flex gap-1 mb-2');
+    const all = el('button', 'toolbar-btn', 'Todas'), none = el('button', 'toolbar-btn', 'Ninguna');
+    const setAll = v => { m.layers.forEach(l => l.visible = v); tree.querySelectorAll('input[data-layer]').forEach(c => c.checked = v); draw2D(); };
+    all.onclick = () => setAll(true); none.onclick = () => setAll(false);
+    bar.append(all, none); tree.append(bar);
+    [...m.layers.values()].sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true })).forEach(l => {
+      const row = el('label', 'tree-item flex items-center gap-2 cursor-pointer');
+      const cb = el('input'); cb.type = 'checkbox'; cb.checked = l.visible; cb.dataset.layer = l.name;
+      cb.addEventListener('change', () => { l.visible = cb.checked; draw2D(); });
+      const sw = el('span', 'swatch'); sw.style.background = displayColor(l.color);
+      row.append(cb, sw, el('span', 'truncate', `${l.name} (${l.count})`)); row.title = l.name;
+      tree.append(row);
     });
-    view2d.entities = tab.data.entities;
-    showProperties({Archivo:tab.name,Formato:'DXF',Entidades:tab.data.entities.length,'Capas detectadas':layerNames.length,'Unidades del archivo':tab.data.header?.$INSUNITS ?? 'No determinadas',Nota:'La medición se expresa en unidades de dibujo; verifica la escala.'});
+    const unsup = Object.entries(m.unsupported);
+    showGroups([
+      { title: 'Archivo', rows: { Archivo: tab.name, Formato: m.source, Versión: m.versionLabel || m.version, Tamaño: fmtSize(tab.file.size) } },
+      { title: 'Contenido', rows: { Entidades: m.stats.entities, 'Elementos dibujados': m.prims.length + m.texts.length, Capas: m.layers.size, Espacios: m.spaces.map(s => s.name).join(', '), 'Unidades del archivo': CAD2D.UNITS[m.units] ?? 'No determinadas' } },
+      { title: 'Notas', rows: {
+        'No representadas': unsup.length ? unsup.map(([k, v]) => `${k} ×${v}`).join(', ') : undefined,
+        Encuadre: m.bounds[view2d.space]?.outliers ? 'Se han excluido del encuadre entidades aisladas muy alejadas.' : undefined,
+        Medición: 'Con imán a vértices (10 px).'
+      } }
+    ]);
   }
-  function showProperties(obj) {
-    const root=$('properties-container');root.replaceChildren();
-    for (const [k,v] of Object.entries(obj)) {
-      const row=document.createElement('div');row.className='border-b pb-2 mb-2';row.style.borderColor='var(--border-color)';
-      const key=document.createElement('div');key.className='font-semibold mb-1';key.textContent=k;
-      const val=document.createElement('div');val.className='break-words';val.textContent=escapeText(v);
-      row.append(key,val);root.append(row);
+
+  // =====================================================================
+  //  3D local (three.js) + STEP/IGES/BREP (occt-import-js)
+  // =====================================================================
+  function finish3D(tab, object, extra = {}) {
+    if (!object) throw new Error('El lector no ha devuelto geometría.');
+    state.object3D = object;
+    state.scene.add(object);
+    fit3D();
+    const size = new THREE.Box3().setFromObject(object).getSize(new THREE.Vector3());
+    const tree = setTree('Modelo');
+    let n = 0;
+    object.traverse(o => { if (o.isMesh && n < 400) { n++; tree.append(el('div', 'tree-item truncate', o.name || `Sólido ${n}`)); } });
+    showGroups([
+      { title: 'Archivo', rows: { Archivo: tab.name, Formato: tab.ext.toUpperCase(), Tamaño: fmtSize(tab.file.size), Estado: 'Geometría cargada' } },
+      { title: 'Extensión', rows: { 'X': formatNumber(size.x), 'Y': formatNumber(size.y), 'Z': formatNumber(size.z), Unidades: extra.units || 'No determinadas automáticamente; verificar en el archivo de origen' } }
+    ]);
+    status(`${tab.ext.toUpperCase()} cargado.`);
+  }
+  async function load3DFile(tab) {
+    const buffer = await tab.file.arrayBuffer();
+    init3D();
+    state.mode = '3d';
+    const mat = () => new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: .1, roughness: .7, side: THREE.DoubleSide });
+    try {
+      if (tab.ext === 'obj') finish3D(tab, new THREE.OBJLoader().parse(new TextDecoder().decode(buffer)));
+      else if (tab.ext === 'stl') { const g = new THREE.STLLoader().parse(buffer); g.computeVertexNormals(); finish3D(tab, new THREE.Mesh(g, mat())); }
+      else if (tab.ext === 'ply') { const g = new THREE.PLYLoader().parse(buffer); g.computeVertexNormals(); const m = mat(); m.vertexColors = !!g.getAttribute('color'); finish3D(tab, new THREE.Mesh(g, m)); }
+      else if (tab.ext === 'glb' || tab.ext === 'gltf') {
+        const gltf = await new Promise((res, rej) => new THREE.GLTFLoader().parse(buffer, '', res, rej));
+        finish3D(tab, gltf.scene || gltf.scenes[0]);
+      } else if (tab.ext === 'fbx') finish3D(tab, new THREE.FBXLoader().parse(buffer, ''));
+    } catch (err) {
+      destroy3D();
+      throw new Error(`No se pudo interpretar el archivo ${tab.ext.toUpperCase()}: ${err.message || err}`);
+    }
+  }
+  let occtPromise = null;
+  async function loadOcct(tab, seq) {
+    status('Cargando motor OpenCascade (occt-import-js, ≈7 MB, solo la primera vez)…');
+    if (!occtPromise) occtPromise = loadScript(LIB.occt + 'occt-import-js.js').then(() => window.occtimportjs({ locateFile: f => LIB.occt + f }));
+    let occt;
+    try { occt = await occtPromise; } catch (e) { occtPromise = null; throw e; }
+    const bytes = new Uint8Array(await tab.file.arrayBuffer());
+    status('Teselando geometría B-Rep…');
+    await new Promise(r => setTimeout(r, 30));
+    const params = { linearUnit: 'millimeter', linearDeflectionType: 'bounding_box_ratio', linearDeflection: 0.001, angularDeflection: 0.5 };
+    const fn = { step: 'ReadStepFile', stp: 'ReadStepFile', iges: 'ReadIgesFile', igs: 'ReadIgesFile', brep: 'ReadBrepFile' }[tab.ext];
+    const res = occt[fn](bytes, tab.ext === 'brep' ? null : params);
+    if (!res || !res.success) { const e = new Error('OpenCascade no pudo interpretar el archivo.'); e.apsHint = true; throw e; }
+    if (seq !== state.loadSeq) return;
+    init3D(); state.mode = '3d';
+    const group = new THREE.Group();
+    const build = (node, parent) => {
+      const g = new THREE.Group(); g.name = node.name || ''; parent.add(g);
+      for (const mi of node.meshes || []) {
+        const m = res.meshes[mi], geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(m.attributes.position.array, 3));
+        if (m.attributes.normal) geo.setAttribute('normal', new THREE.Float32BufferAttribute(m.attributes.normal.array, 3)); else geo.computeVertexNormals();
+        if (m.index) geo.setIndex(new THREE.Uint32BufferAttribute(Uint32Array.from(m.index.array), 1));
+        const color = m.color ? new THREE.Color(m.color[0], m.color[1], m.color[2]) : new THREE.Color(0x94a3b8);
+        const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, metalness: .15, roughness: .6, side: THREE.DoubleSide }));
+        mesh.name = m.name || node.name || ''; g.add(mesh);
+      }
+      (node.children || []).forEach(c => build(c, g));
+    };
+    build(res.root, group);
+    group.rotation.x = -Math.PI / 2; // Z arriba (CAD) → Y arriba (three)
+    finish3D(tab, group, { units: 'Milímetros (convertido por OpenCascade)' });
+  }
+
+  // =====================================================================
+  //  Inventor (contenedor OLE): iProperties, miniatura y referencias
+  // =====================================================================
+  function readInventorOle(u8) {
+    if (!window.CFB) throw new Error('No se ha cargado la biblioteca CFB.');
+    if (!(u8[0] === 0xD0 && u8[1] === 0xCF && u8[2] === 0x11 && u8[3] === 0xE0)) throw new Error('No es un contenedor OLE de Inventor (¿archivo dañado o de otro tipo?).');
+    const cfb = CFB.read(u8, { type: 'array' });
+    const groups = [], all = {};
+    let thumb = null, refs = [];
+    for (const e of cfb.FileIndex) {
+      if (e.type !== 2 || !e.content) continue;
+      const data = e.content instanceof Uint8Array ? e.content : Uint8Array.from(e.content);
+      if (e.name.charCodeAt(0) === 5) {
+        for (const set of OLEPROPS.parsePropertySetStream(data)) {
+          const setName = Object.entries(set.dict).find(([, n]) => n === 'Property Set Name');
+          const title = setName ? set.props[setName[0]] : (OLEPROPS.FMTID_NAMES[set.fmtid] || set.fmtid);
+          if (!title || /^_|Design Tracking Control|Private/i.test(title)) continue;
+          const names = OLEPROPS.PID_NAMES[title] || {};
+          const rows = {};
+          for (let [pid, v] of Object.entries(set.props)) {
+            if (setName && pid === setName[0]) continue;
+            if (v && v.clipboard) { if (pid === '17') thumb = OLEPROPS.extractThumbnail(v); continue; }
+            const name = names[pid] || set.dict[pid];
+            if (!name || v === undefined || v === '') continue;
+            if (name === 'Estado de diseño') v = { 1: 'En curso', 2: 'Pendiente', 3: 'Publicado' }[v] || v;
+            rows[name] = v; all[name] = v;
+          }
+          groups.push({ title: OLEPROPS.SET_TITLES[title] || title, rows });
+        }
+      } else if (e.name === 'UFRxDoc') {
+        const dec = d => new TextDecoder('utf-16le').decode(d.byteLength % 2 ? d.subarray(0, d.byteLength - 1) : d);
+        const s = dec(data) + '\u0000' + dec(data.subarray(1)); // cadenas alineadas a byte par e impar
+        const seen = new Set(), anyPath = [];
+        for (const m of s.matchAll(/[A-Za-z]:\\[^\u0000-\u001f"*?<>|]{1,240}?\.(ipt|iam|ipn|idw|dwg|ide)/gi)) {
+          const p = m[0]; anyPath.push(p.toLowerCase()); if (/\\Templates\\|Design Data\\/i.test(p)) continue;
+          if (!seen.has(p.toLowerCase())) { seen.add(p.toLowerCase()); refs.push(p); }
+        }
+        for (const m of s.matchAll(/(?<![\\\w])[\w\- .()]{1,120}\.(ipt|iam|ipn|idw|ide)/gi)) {
+          const p = m[0].trim(); if (!p || anyPath.some(x => x.endsWith(p.toLowerCase()))) continue;
+          if (!seen.has(p.toLowerCase())) { seen.add(p.toLowerCase()); refs.push(p); }
+        }
+      }
+    }
+    return { groups, all, thumb, refs };
+  }
+  async function loadInventor(tab, seq) {
+    const u8 = new Uint8Array(await tab.file.arrayBuffer());
+    const info = readInventorOle(u8);
+    if (seq !== state.loadSeq) return;
+    const self = tab.name.toLowerCase();
+    info.refs = info.refs.filter(r => baseName(r).toLowerCase() !== self);
+    tab.data = info; tab.mode = 'inv';
+    showInventorView(tab, info);
+    const cfg = apsConfig();
+    if (cfg.url && cfg.auto) startAps(tab);
+  }
+  function inventorRefsTree(tab, info) {
+    const tree = setTree(info.refs.length ? `Referencias (${info.refs.length})` : 'Referencias');
+    if (!info.refs.length) { tree.append(el('div', 'p-2 status', tab.ext === 'ipt' ? 'Las piezas no tienen referencias a otros archivos.' : 'No se han encontrado referencias.')); return; }
+    let missing = 0;
+    for (const r of info.refs) {
+      const found = state.pool.has(baseName(r).toLowerCase());
+      if (!found) missing++;
+      const row = el('div', 'tree-item flex items-center gap-2');
+      const ic = el('i', `fa-solid ${found ? 'fa-circle-check text-green-600' : 'fa-circle-exclamation text-amber-500'}`);
+      row.append(ic, el('span', 'truncate', baseName(r))); row.title = r + (found ? '' : '\n(no cargado)');
+      tree.append(row);
+    }
+    if (missing) tree.prepend(el('div', 'p-2 mb-1 rounded text-[11px] bg-amber-100 text-amber-900', `Faltan ${missing} archivos. Para ver la geometría completa abre la carpeta del proyecto (botón Carpeta) o suelta las piezas junto al ${INV_TYPE[tab.ext].toLowerCase()}.`));
+    return missing;
+  }
+  function showInventorView(tab, info) {
+    const v = $('info-view'); v.replaceChildren(); v.classList.remove('hidden');
+    const card = el('div', 'max-w-xl mx-auto my-8 p-6 rounded-xl border panel flex flex-col items-center gap-3 text-center');
+    if (info.thumb) {
+      const img = el('img', 'rounded-lg border'); img.src = info.thumb; img.alt = `Miniatura de ${tab.name}`;
+      img.style.cssText = 'width:min(360px,80vw);height:auto;border-color:var(--border-color);background:#fff';
+      card.append(img);
+    } else card.append(el('div', 'text-6xl opacity-40 py-6', '⬚'));
+    card.append(el('div', 'font-bold text-base break-all', tab.name));
+    const a = info.all;
+    card.append(el('div', 'status', [INV_TYPE[tab.ext], a['Número de pieza'], a['Descripción'], a['Material']].filter(Boolean).join(' · ')));
+    card.append(el('p', 'text-xs max-w-md', 'Vista previa local (miniatura guardada por Inventor e iProperties). La geometría exacta está en formato propietario de Autodesk y se obtiene con el servicio oficial Autodesk APS.'));
+    const btn = el('button', 'btn-primary'); btn.innerHTML = '<i class="fa-solid fa-cube"></i> Ver geometría con Autodesk APS';
+    btn.onclick = () => startAps(tab);
+    const prog = el('div', 'progress w-full max-w-sm hidden'); prog.append(el('div')); prog.id = 'aps-progress';
+    const msg = el('div', 'status'); msg.id = 'aps-msg';
+    card.append(btn, prog, msg);
+    v.append(card);
+    inventorRefsTree(tab, info);
+    showGroups([
+      { title: 'Archivo', rows: { Archivo: tab.name, Tipo: INV_TYPE[tab.ext], Tamaño: fmtSize(tab.file.size), Referencias: info.refs.length || undefined } },
+      ...info.groups
+    ]);
+    status(`${INV_TYPE[tab.ext]} Inventor leído: ${Object.keys(info.all).length} propiedades${info.thumb ? ', miniatura' : ''}${info.refs.length ? `, ${info.refs.length} referencias` : ''}.`);
+  }
+  function showApsOnlyView(tab, text) {
+    tab.mode = 'aps-only';
+    const v = $('info-view'); v.replaceChildren(); v.classList.remove('hidden');
+    const card = el('div', 'max-w-xl mx-auto my-12 p-6 rounded-xl border panel flex flex-col items-center gap-3 text-center');
+    card.append(el('div', 'text-5xl text-blue-500', '⬡'), el('div', 'font-bold break-all', tab.name), el('p', 'text-xs', text));
+    const btn = el('button', 'btn-primary', 'Convertir y ver con Autodesk APS'); btn.onclick = () => startAps(tab);
+    const prog = el('div', 'progress w-full max-w-sm hidden'); prog.append(el('div')); prog.id = 'aps-progress';
+    const msg = el('div', 'status'); msg.id = 'aps-msg';
+    card.append(btn, prog, msg); v.append(card);
+    setTree('Modelo');
+    showProperties({ Archivo: tab.name, Formato: tab.ext.toUpperCase(), Tamaño: fmtSize(tab.file.size) });
+    status(text);
+  }
+  function showErrorView(tab, err) {
+    const v = $('info-view'); v.replaceChildren(); v.classList.remove('hidden');
+    $('canvas-2d').classList.add('hidden'); $('canvas-3d').classList.add('hidden');
+    const card = el('div', 'max-w-xl mx-auto my-12 p-6 rounded-xl border panel flex flex-col items-center gap-3 text-center');
+    card.append(el('div', 'text-4xl text-red-500', '⚠'), el('div', 'font-bold break-all', tab.name), el('p', 'text-xs break-words', err.message || String(err)));
+    if (err.apsHint || EXT[tab.ext] === 'aps') {
+      card.append(el('p', 'text-xs', 'Alternativa: conversión con el servicio oficial de Autodesk (APS Model Derivative).'));
+      const btn = el('button', 'btn-primary', 'Intentar con Autodesk APS'); btn.onclick = () => startAps(tab);
+      const prog = el('div', 'progress w-full max-w-sm hidden'); prog.append(el('div')); prog.id = 'aps-progress';
+      const msg = el('div', 'status'); msg.id = 'aps-msg';
+      card.append(btn, prog, msg);
+    }
+    v.append(card);
+    showProperties({ Archivo: tab.name, Formato: tab.ext.toUpperCase(), Estado: 'Error de lectura', Detalle: err.message || String(err) });
+  }
+
+  // ZIP: ensamblaje empaquetado → lista y conversión APS
+  async function loadZip(tab, seq) {
+    const zip = await JSZip.loadAsync(await tab.file.arrayBuffer());
+    const names = Object.keys(zip.files).filter(n => !zip.files[n].dir);
+    const prio = ['iam', 'idw', 'ipn', 'dwg', 'ipt', 'ifc', 'step', 'stp'];
+    const roots = names.filter(n => prio.includes(fileExt(n))).sort((a, b) => prio.indexOf(fileExt(a)) - prio.indexOf(fileExt(b)) || a.split('/').length - b.split('/').length);
+    if (seq !== state.loadSeq) return;
+    tab.mode = 'zip'; tab.zipRoot = roots[0] || null;
+    showApsOnlyView(tab, `Paquete ZIP con ${names.length} archivos. Archivo raíz: ${tab.zipRoot || '(ninguno)'} (se puede cambiar en el panel izquierdo).`);
+    const tree = setTree(`Contenido ZIP (${names.length})`);
+    for (const n of names.slice(0, 500)) {
+      const row = el('label', 'tree-item flex items-center gap-2 cursor-pointer');
+      if (prio.includes(fileExt(n))) {
+        const r = el('input'); r.type = 'radio'; r.name = 'zip-root'; r.checked = n === tab.zipRoot; r.onchange = () => { tab.zipRoot = n; status(`Archivo raíz: ${n}`); };
+        row.append(r);
+      } else row.append(el('span', 'w-3'));
+      row.append(el('span', 'truncate', n)); row.title = n; tree.append(row);
     }
   }
 
+  // =====================================================================
+  //  Autodesk APS (Model Derivative + Viewer) a través del proxy
+  // =====================================================================
+  function apsConfig() { try { return JSON.parse(localStorage.getItem('visorcad.aps') || '{}'); } catch { return {}; } }
+  async function apsCall(action, params = {}, body) {
+    const cfg = apsConfig();
+    if (!cfg.url) throw new Error('Configura primero la URL del proxy APS (botón APS de la barra).');
+    const u = new URL(cfg.url); u.searchParams.set('action', action);
+    for (const [k, v] of Object.entries(params)) if (v != null) u.searchParams.set(k, v);
+    const headers = {};
+    if (cfg.key) headers['x-visor-key'] = cfg.key;
+    if (cfg.anon) { headers.Authorization = `Bearer ${cfg.anon}`; headers.apikey = cfg.anon; }
+    if (body) headers['Content-Type'] = 'application/octet-stream';
+    const r = await fetch(u, { method: body ? 'POST' : 'GET', headers, body });
+    let j = null; try { j = await r.json(); } catch {}
+    if (!r.ok || !j || j.error) throw new Error((j && j.error) || `Proxy APS respondió ${r.status}`);
+    return j;
+  }
+  function apsUI(text, pct, isError) {
+    const msg = $('aps-msg'), prog = $('aps-progress');
+    if (msg) { msg.textContent = text; msg.style.color = isError ? '#dc2626' : ''; }
+    if (prog) { prog.classList.toggle('hidden', pct == null); prog.firstChild.style.width = `${pct || 0}%`; }
+    status(text, isError);
+  }
+  // Recoge recursivamente las referencias disponibles para empaquetar el ensamblaje
+  async function collectRefs(rootFile, rootRefs) {
+    const out = new Map(), missing = new Set(), queue = [...rootRefs];
+    while (queue.length) {
+      const r = queue.shift(), key = baseName(r).toLowerCase();
+      if (out.has(key) || key === rootFile.name.toLowerCase()) continue;
+      const f = state.pool.get(key);
+      if (!f) { missing.add(baseName(r)); continue; }
+      out.set(key, f);
+      if (['iam', 'idw', 'ipn'].includes(fileExt(f.name))) {
+        try { queue.push(...readInventorOle(new Uint8Array(await f.arrayBuffer())).refs); } catch {}
+      }
+    }
+    return { files: [...out.values()], missing: [...missing] };
+  }
+  async function startAps(tab) {
+    if (!apsConfig().url) { openApsDialog(); apsUI('Configura el proxy APS para convertir la geometría.', null, true); return; }
+    if (tab.apsBusy) return;
+    tab.apsBusy = true;
+    const seq = state.loadSeq;
+    try {
+      let body, root = null, key;
+      if (tab.ext === 'zip') {
+        if (!tab.zipRoot) throw new Error('El ZIP no contiene un archivo raíz reconocible.');
+        body = await tab.file.arrayBuffer(); root = tab.zipRoot;
+        key = `${(await sha256Hex(body)).slice(0, 20)}-${baseName(root)}.zip`;
+      } else {
+        const own = await tab.file.arrayBuffer();
+        const refs = tab.data?.refs || [];
+        if (refs.length) {
+          apsUI('Empaquetando referencias…', 2);
+          const { files, missing } = await collectRefs(tab.file, refs);
+          if (missing.length) apsUI(`Aviso: faltan ${missing.length} referencias (${missing.slice(0, 4).join(', ')}${missing.length > 4 ? '…' : ''}); la vista puede quedar incompleta.`, 3, true);
+          const zip = new JSZip(), hashes = [await sha256Hex(own)];
+          zip.file(tab.name, own, { date: new Date(Date.UTC(2000, 0, 1)) });
+          for (const f of files) { const b = await f.arrayBuffer(); hashes.push(f.name + (await sha256Hex(b)).slice(0, 16)); zip.file(f.name, b, { date: new Date(Date.UTC(2000, 0, 1)) }); }
+          body = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
+          root = tab.name;
+          key = `${(await sha256Hex(new TextEncoder().encode(hashes.sort().join('|')))).slice(0, 20)}-${tab.name}.zip`;
+        } else {
+          body = own;
+          key = `${(await sha256Hex(own)).slice(0, 20)}-${tab.name}`;
+        }
+      }
+      apsUI('Comprobando si ya está convertido…', 5);
+      let { urn, status: st } = await apsCall('check', { key });
+      if (st !== 'success' && st !== 'inprogress' && st !== 'pending') {
+        apsUI(`Subiendo ${fmtSize(body.byteLength)} a Autodesk APS…`, 10);
+        ({ urn } = await apsCall('upload', { key, root }, body));
+      }
+      const t0 = Date.now();
+      for (;;) {
+        const s = await apsCall('status', { urn });
+        const p = parseInt(s.progress) || 0;
+        if (s.status === 'success') break;
+        if (s.status === 'failed' || s.status === 'timeout') throw new Error(`La traducción APS ha fallado. ${s.messages?.join(' · ') || ''}`);
+        if (Date.now() - t0 > 20 * 60000) throw new Error('La traducción tarda demasiado; vuelve a intentarlo más tarde (el resultado quedará en caché).');
+        apsUI(`Convirtiendo en Autodesk APS… ${s.progress || ''}`, 15 + p * 0.8);
+        await new Promise(r => setTimeout(r, 3000));
+      }
+      tab.urn = urn;
+      if (seq !== state.loadSeq || state.activeId !== tab.id) { status(`${tab.name}: conversión APS lista.`); return; }
+      apsUI('Cargando Autodesk Viewer…', 98);
+      await openApsViewer(tab, urn);
+    } catch (err) {
+      console.error(err);
+      apsUI(err.message || String(err), null, true);
+    } finally { tab.apsBusy = false; }
+  }
+  let apsViewerLoaded = null;
+  async function ensureApsViewer() {
+    if (!apsViewerLoaded) {
+      loadCss(LIB.apsViewer + 'style.min.css');
+      apsViewerLoaded = loadScript(LIB.apsViewer + 'viewer3D.min.js').then(() => new Promise(res => {
+        Autodesk.Viewing.Initializer({ env: 'AutodeskProduction2', api: 'streamingV2', getAccessToken: cb => apsCall('token').then(t => cb(t.access_token, t.expires_in)).catch(e => status(e.message, true)) }, res);
+      }));
+      apsViewerLoaded.catch(() => { apsViewerLoaded = null; });
+    }
+    return apsViewerLoaded;
+  }
+  function destroyAps() {
+    if (state.aps?.viewer) { try { state.aps.viewer.finish(); } catch {} }
+    state.aps = null;
+    const c = $('aps-viewer'); c.replaceChildren(); c.classList.add('hidden');
+  }
+  async function openApsViewer(tab, urn) {
+    await ensureApsViewer();
+    destroy3D(); destroyAps();
+    $('info-view').classList.add('hidden'); $('canvas-2d').classList.add('hidden');
+    const c = $('aps-viewer'); c.classList.remove('hidden');
+    const div = el('div'); div.style.cssText = 'position:absolute;inset:0'; c.append(div);
+    const viewer = new Autodesk.Viewing.GuiViewer3D(div);
+    viewer.start();
+    state.aps = { viewer, tab }; state.mode = 'aps';
+    apsTheme();
+    const doc = await new Promise((res, rej) => Autodesk.Viewing.Document.load('urn:' + urn, res, (code, msg) => rej(new Error(`Autodesk Viewer no pudo cargar el documento (${code}) ${msg || ''}`))));
+    const views = doc.getRoot().search({ type: 'geometry' });
+    const tree = setTree(`Vistas (${views.length})`);
+    const load = node => {
+      viewer.loadDocumentNode(doc, node).then(() => {
+        tree.querySelectorAll('.tree-item').forEach(r => r.classList.toggle('sel', r.dataset.guid === node.guid()));
+        status(`${tab.name}: ${node.name()} (${node.is2D() ? '2D' : '3D'}) cargado con Autodesk Viewer.`);
+      }).catch(e => status(`Error al cargar la vista: ${e.message || e}`, true));
+    };
+    for (const node of views) {
+      const row = el('div', 'tree-item cursor-pointer flex items-center gap-2'); row.dataset.guid = node.guid();
+      row.append(el('i', `fa-solid ${node.is2D() ? 'fa-file-lines' : 'fa-cube'}`), el('span', 'truncate', node.name()));
+      row.onclick = () => load(node); tree.append(row);
+    }
+    if (tab.data?.refs?.length) {
+      tree.append(el('div', 'group-title mt-3', 'Referencias'));
+      tab.data.refs.forEach(r => tree.append(el('div', 'tree-item truncate status', baseName(r))));
+    }
+    viewer.addEventListener(Autodesk.Viewing.SELECTION_CHANGED_EVENT, ev => {
+      if (!ev.dbIdArray?.length) return;
+      viewer.getProperties(ev.dbIdArray[0], r => {
+        const rows = { Nombre: r.name };
+        (r.properties || []).slice(0, 80).forEach(p => { if (!p.hidden && p.displayValue !== '') rows[`${p.displayCategory ? p.displayCategory + ' · ' : ''}${p.displayName}`] = `${p.displayValue}${p.units ? ' ' + p.units : ''}`; });
+        showGroups([{ title: 'Selección', rows }, ...(tab.data?.groups || [])]);
+      });
+    });
+    load(doc.getRoot().getDefaultGeometry() || views[0]);
+  }
+  function apsTheme() {
+    const v = state.aps?.viewer; if (!v) return;
+    const dark = state.theme === 'oscuro';
+    try { v.setTheme(dark ? 'dark-theme' : 'light-theme'); } catch {}
+    const c = dark ? [2, 6, 23, 15, 23, 42] : state.theme === 'medio' ? [203, 213, 225, 226, 232, 240] : [241, 245, 249, 255, 255, 255];
+    try { v.setBackgroundColor(...c); } catch {}
+  }
+  function openApsDialog() {
+    const cfg = apsConfig();
+    $('aps-url').value = cfg.url || ''; $('aps-key').value = cfg.key || ''; $('aps-anon').value = cfg.anon || ''; $('aps-auto').checked = !!cfg.auto;
+    $('aps-test-out').textContent = '';
+    $('aps-dialog').showModal();
+  }
+  function saveApsDialog() {
+    const cfg = { url: $('aps-url').value.trim(), key: $('aps-key').value.trim(), anon: $('aps-anon').value.trim(), auto: $('aps-auto').checked };
+    try { localStorage.setItem('visorcad.aps', JSON.stringify(cfg)); } catch {}
+    return cfg;
+  }
+
+  // =====================================================================
+  //  three.js
+  // =====================================================================
   function destroy3D() {
     if (state.animationId) cancelAnimationFrame(state.animationId);
-    state.animationId=null;
+    state.animationId = null;
     if (state.controls) state.controls.dispose();
-    if (state.renderer) {
-      state.renderer.dispose();
-      state.renderer.domElement.remove();
-    }
-    if (state.scene) {
-      state.scene.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material){if(Array.isArray(o.material))o.material.forEach(m=>m.dispose());else o.material.dispose();} });
-    }
-    state.scene=null;state.camera=null;state.renderer=null;state.controls=null;state.object3D=null;state.grid=null;
+    if (state.renderer) { state.renderer.dispose(); state.renderer.domElement.remove(); }
+    if (state.scene) state.scene.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose()); });
+    state.scene = null; state.camera = null; state.renderer = null; state.controls = null; state.object3D = null; state.grid = null;
+    state.clippingEnabled = false; $('cut-slider')?.remove();
   }
   function init3D() {
     destroy3D();
-    const container=$('canvas-3d');container.classList.remove('hidden');
-    state.scene=new THREE.Scene();
-    state.scene.background=new THREE.Color(state.theme==='oscuro'?0x020617:0xf1f5f9);
-    state.camera=new THREE.PerspectiveCamera(45,Math.max(1,container.clientWidth)/Math.max(1,container.clientHeight),0.01,1e7);
-    state.camera.position.set(10,10,10);
-    state.renderer=new THREE.WebGLRenderer({antialias:true});
-    state.renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
-    state.renderer.setSize(container.clientWidth,container.clientHeight);
+    const container = $('canvas-3d'); container.classList.remove('hidden');
+    state.scene = new THREE.Scene();
+    state.scene.background = new THREE.Color(state.theme === 'oscuro' ? 0x020617 : state.theme === 'medio' ? 0xcbd5e1 : 0xf1f5f9);
+    state.camera = new THREE.PerspectiveCamera(45, Math.max(1, container.clientWidth) / Math.max(1, container.clientHeight), 0.01, 1e7);
+    state.camera.position.set(10, 10, 10);
+    state.renderer = new THREE.WebGLRenderer({ antialias: true });
+    state.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    state.renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(state.renderer.domElement);
-    state.controls=new THREE.OrbitControls(state.camera,state.renderer.domElement);
-    state.controls.enableDamping=true;
-    state.scene.add(new THREE.HemisphereLight(0xffffff,0x64748b,1.2));
-    const light=new THREE.DirectionalLight(0xffffff,.8);light.position.set(10,20,15);state.scene.add(light);
-    state.grid=new THREE.GridHelper(100,100,0x2563eb,0x94a3b8);state.scene.add(state.grid);
-    state.raycaster=new THREE.Raycaster();state.pointer=new THREE.Vector2();
-    state.renderer.domElement.addEventListener('pointerdown',on3DPointerDown);
-    state.renderer.domElement.addEventListener('pointermove',on3DPointerMove);
-    const render=()=>{ if(!state.renderer)return;state.animationId=requestAnimationFrame(render);state.controls?.update();state.renderer.render(state.scene,state.camera); };
+    state.controls = new THREE.OrbitControls(state.camera, state.renderer.domElement);
+    state.controls.enableDamping = true;
+    state.scene.add(new THREE.HemisphereLight(0xffffff, 0x64748b, 1.2));
+    const light = new THREE.DirectionalLight(0xffffff, .8); light.position.set(10, 20, 15); state.scene.add(light);
+    state.grid = new THREE.GridHelper(100, 100, 0x2563eb, 0x94a3b8); state.scene.add(state.grid);
+    state.raycaster = new THREE.Raycaster(); state.pointer = new THREE.Vector2();
+    state.renderer.domElement.addEventListener('pointerdown', on3DPointerDown);
+    state.renderer.domElement.addEventListener('pointermove', on3DPointerMove);
+    const render = () => { if (!state.renderer) return; state.animationId = requestAnimationFrame(render); state.controls?.update(); state.renderer.render(state.scene, state.camera); };
     render();
   }
   function on3DPointerDown(e) {
-    if(!state.measureMode || !state.object3D)return;
-    const rect=state.renderer.domElement.getBoundingClientRect();
-    state.pointer.x=((e.clientX-rect.left)/rect.width)*2-1;
-    state.pointer.y=-((e.clientY-rect.top)/rect.height)*2+1;
-    state.raycaster.setFromCamera(state.pointer,state.camera);
-    const hits=state.raycaster.intersectObject(state.object3D,true);
-    if(!hits.length){status('No se ha seleccionado geometría en ese punto.');return;}
-    const p=hits[0].point.clone();state.measurePoints.push(p);
-    if(state.measurePoints.length===2){
-      const [a,b]=state.measurePoints;const d=a.distanceTo(b);
-      const geom=new THREE.BufferGeometry().setFromPoints([a,b]);
-      const line=new THREE.Line(geom,new THREE.LineBasicMaterial({color:0xef4444}));state.scene.add(line);state.measureObjects.push(line);
-      $('measure-label').textContent=`Distancia 3D: ${formatNumber(d)} unidades de modelo`;
-      $('measure-label').classList.remove('hidden');state.measureMode=false;$('btn-measure').classList.remove('active');
-      status(`Medición 3D: ${formatNumber(d)} unidades de modelo. Verifica las unidades del archivo.`);
+    if (!state.measureMode || !state.object3D) return;
+    const rect = state.renderer.domElement.getBoundingClientRect();
+    state.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    state.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    state.raycaster.setFromCamera(state.pointer, state.camera);
+    const hits = state.raycaster.intersectObject(state.object3D, true);
+    if (!hits.length) { status('No se ha seleccionado geometría en ese punto.'); return; }
+    state.measurePoints.push(hits[0].point.clone());
+    if (state.measurePoints.length === 2) {
+      const [a, b] = state.measurePoints, d = a.distanceTo(b);
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), new THREE.LineBasicMaterial({ color: 0xef4444, depthTest: false }));
+      state.scene.add(line); state.measureObjects.push(line);
+      $('measure-label').textContent = `Distancia 3D: ${formatNumber(d)} unidades de modelo`;
+      $('measure-label').classList.remove('hidden'); state.measureMode = false; $('btn-measure').classList.remove('active');
+      status(`Medición 3D: ${formatNumber(d)} unidades de modelo.`);
     }
   }
   function on3DPointerMove(e) {
-    const rect=state.renderer.domElement.getBoundingClientRect();
-    state.pointer.x=((e.clientX-rect.left)/rect.width)*2-1;state.pointer.y=-((e.clientY-rect.top)/rect.height)*2+1;
-    state.raycaster.setFromCamera(state.pointer,state.camera);
-    const hit=state.object3D ? state.raycaster.intersectObject(state.object3D,true)[0] : null;
-    if(hit){const p=hit.point;$('coords-text').textContent=`X: ${formatNumber(p.x)} Y: ${formatNumber(p.y)} Z: ${formatNumber(p.z)}`;}
+    if (!state.object3D) return;
+    const rect = state.renderer.domElement.getBoundingClientRect();
+    state.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1; state.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    state.raycaster.setFromCamera(state.pointer, state.camera);
+    const hit = state.raycaster.intersectObject(state.object3D, true)[0];
+    if (hit) { const p = hit.point; $('coords-text').textContent = `X: ${formatNumber(p.x)} Y: ${formatNumber(p.y)} Z: ${formatNumber(p.z)}`; }
   }
   function fit3D() {
-    if(!state.object3D || !state.camera) { if(state.mode==='2d')fit2D();return; }
-    const box=new THREE.Box3().setFromObject(state.object3D);
-    if(box.isEmpty())return;
-    const size=box.getSize(new THREE.Vector3()), center=box.getCenter(new THREE.Vector3());
-    const maxDim=Math.max(size.x,size.y,size.z,1);
+    if (!state.object3D || !state.camera) return;
+    const box = new THREE.Box3().setFromObject(state.object3D);
+    if (box.isEmpty()) return;
+    const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z, 1e-6);
     state.controls.target.copy(center);
-    state.camera.position.copy(center).add(new THREE.Vector3(maxDim*1.5,maxDim*1.2,maxDim*1.5));
-    state.camera.near=Math.max(maxDim/10000,0.001);state.camera.far=maxDim*100;state.camera.updateProjectionMatrix();
+    state.camera.position.copy(center).add(new THREE.Vector3(maxDim * 1.5, maxDim * 1.2, maxDim * 1.5));
+    state.camera.near = maxDim / 10000; state.camera.far = maxDim * 100; state.camera.updateProjectionMatrix();
+    if (state.grid) { state.grid.scale.setScalar(maxDim * 4 / 100); state.grid.position.set(center.x, box.min.y, center.z); }
     state.controls.update();
   }
-  function set3DView(type) {
-    if(!state.object3D || !state.camera){status('No hay geometría 3D cargada.');return;}
-    const box=new THREE.Box3().setFromObject(state.object3D),center=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3()),d=Math.max(size.x,size.y,size.z,1)*2;
-    const dirs={top:new THREE.Vector3(0,1,0),front:new THREE.Vector3(0,0,1),iso:new THREE.Vector3(1,1,1)};
+  function setView(type) {
+    if (state.mode === 'aps') {
+      const ext = state.aps.viewer.getExtension('Autodesk.ViewCubeUi');
+      try { ext?.setViewCube({ top: 'top', front: 'front', iso: 'front top right' }[type]); } catch { state.aps.viewer.fitToView(); }
+      return;
+    }
+    if (!state.object3D || !state.camera) { status(state.mode === '2d' ? 'Las vistas predefinidas son para modelos 3D.' : 'No hay geometría 3D cargada.'); return; }
+    const box = new THREE.Box3().setFromObject(state.object3D), center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3()), d = Math.max(size.x, size.y, size.z, 1e-6) * 2;
+    const dirs = { top: new THREE.Vector3(0, 1, 0.0001), front: new THREE.Vector3(0, 0, 1), iso: new THREE.Vector3(1, 1, 1).normalize() };
     state.camera.position.copy(center).add(dirs[type].clone().multiplyScalar(d));
-    state.camera.lookAt(center);state.controls.target.copy(center);state.controls.update();
+    state.camera.lookAt(center); state.controls.target.copy(center); state.controls.update();
   }
   function clearMeasures() {
-    if(state.scene) for(const o of state.measureObjects){state.scene.remove(o);o.geometry?.dispose();o.material?.dispose();}
-    state.measureObjects=[];
-    state.measurePoints=[];
-    if(state.mode==='2d')draw2D();
+    if (state.scene) for (const o of state.measureObjects) { state.scene.remove(o); o.geometry?.dispose(); o.material?.dispose(); }
+    state.measureObjects = []; state.measurePoints = [];
+    if (state.mode === '2d') draw2D();
+    if (state.mode === 'aps') { try { state.aps.viewer.getExtension('Autodesk.Measure')?.deleteMeasurements?.(); } catch {} }
     $('measure-label').classList.add('hidden');
   }
-  function toggleMeasure() {
-    state.measureMode=!state.measureMode;state.measurePoints=[];
-    $('btn-measure').classList.toggle('active',state.measureMode);
+  async function toggleMeasure() {
+    if (state.mode === 'aps') {
+      const v = state.aps.viewer, ext = v.getExtension('Autodesk.Measure') || await v.loadExtension('Autodesk.Measure');
+      if (ext.isActive()) ext.deactivate(); else ext.activate('distance');
+      $('btn-measure').classList.toggle('active', ext.isActive());
+      return;
+    }
+    state.measureMode = !state.measureMode; state.measurePoints = [];
+    $('btn-measure').classList.toggle('active', state.measureMode);
     $('measure-label').classList.add('hidden');
-    if(state.mode==='2d')draw2D();
-    status(state.measureMode?'Medición activada: selecciona dos puntos.':'Medición cancelada.');
+    if (state.mode === '2d') draw2D();
+    status(state.measureMode ? 'Medición activada: selecciona dos puntos.' : 'Medición cancelada.');
   }
-  function toggleCut() {
-    if(state.mode!=='3d' || !state.renderer || !state.object3D){status('El corte 3D requiere un modelo 3D cargado.',true);return;}
-    state.clippingEnabled=!state.clippingEnabled;
-    state.renderer.localClippingEnabled=state.clippingEnabled;
-    if(!state.clippingPlane)state.clippingPlane=new THREE.Plane(new THREE.Vector3(1,0,0),0);
-    state.object3D.traverse(o=>{if(o.material){const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{m.clippingPlanes=state.clippingEnabled?[state.clippingPlane]:[];m.needsUpdate=true;});}});
-    if(state.clippingEnabled){
-      const slider=document.createElement('input');slider.type='range';slider.min='-10';slider.max='10';slider.step='.1';slider.value='0';slider.title='Posición del plano de corte';
-      slider.style.cssText='position:absolute;top:12px;right:12px;z-index:12;width:180px';
-      slider.id='cut-slider';$('viewport-container').append(slider);
-      slider.addEventListener('input',()=>{state.clippingPlane.constant=Number(slider.value);});
+  async function toggleCut() {
+    if (state.mode === 'aps') {
+      const v = state.aps.viewer, ext = v.getExtension('Autodesk.Section') || await v.loadExtension('Autodesk.Section');
+      if (ext.isActive()) ext.deactivate(); else ext.activate('x');
+      $('btn-cut').classList.toggle('active', ext.isActive());
+      return;
+    }
+    if (state.mode !== '3d' || !state.renderer || !state.object3D) { status('El corte 3D requiere un modelo 3D cargado.', true); return; }
+    state.clippingEnabled = !state.clippingEnabled;
+    state.renderer.localClippingEnabled = state.clippingEnabled;
+    const box = new THREE.Box3().setFromObject(state.object3D);
+    if (!state.clippingPlane) state.clippingPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
+    state.clippingPlane.constant = (box.min.x + box.max.x) / 2;
+    state.object3D.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { m.clippingPlanes = state.clippingEnabled ? [state.clippingPlane] : []; m.needsUpdate = true; }); });
+    $('btn-cut').classList.toggle('active', state.clippingEnabled);
+    if (state.clippingEnabled) {
+      const slider = el('input'); slider.type = 'range'; slider.min = box.min.x; slider.max = box.max.x; slider.step = (box.max.x - box.min.x) / 500 || 0.01; slider.value = state.clippingPlane.constant; slider.title = 'Posición del plano de corte (X)';
+      slider.style.cssText = 'position:absolute;top:12px;right:12px;z-index:12;width:200px'; slider.id = 'cut-slider';
+      $('viewport-container').append(slider);
+      slider.addEventListener('input', () => { state.clippingPlane.constant = Number(slider.value); });
       status('Plano de corte X activado. Ajusta el deslizador.');
-    } else { $('cut-slider')?.remove();status('Plano de corte desactivado.'); }
+    } else { $('cut-slider')?.remove(); status('Plano de corte desactivado.'); }
   }
-
   function resetView() {
-    state.measureMode=false;state.measurePoints=[];clearMeasures();
-    $('canvas-2d').classList.add('hidden');$('canvas-3d').classList.add('hidden');
-    $('measure-label').classList.add('hidden');$('btn-measure').classList.remove('active');
-    destroy3D();state.mode=null;
+    state.measureMode = false; state.measurePoints = []; clearMeasures();
+    for (const id of ['canvas-2d', 'canvas-3d', 'info-view', 'measure-label']) $(id).classList.add('hidden');
+    $('btn-measure').classList.remove('active'); $('btn-cut').classList.remove('active');
+    destroy3D(); destroyAps();
+    state.mode = null; view2d.model = null;
+    $('coords-text').textContent = 'X: — Y: — Z: —';
   }
 
-  $('file-input').addEventListener('change',e=>{if(e.target.files?.length)openFiles(e.target.files);e.target.value='';});
-  window.addEventListener('dragover',e=>e.preventDefault());
-  window.addEventListener('drop',e=>{e.preventDefault();if(e.dataTransfer?.files?.length)openFiles(e.dataTransfer.files);});
-  $('theme-select').addEventListener('change',e=>setTheme(e.target.value));
-  $('btn-fit').addEventListener('click',()=>state.mode==='2d'?fit2D():fit3D());
-  $('btn-top').addEventListener('click',()=>set3DView('top'));
-  $('btn-front').addEventListener('click',()=>set3DView('front'));
-  $('btn-iso').addEventListener('click',()=>set3DView('iso'));
-  $('btn-measure').addEventListener('click',toggleMeasure);
-  $('btn-clear-measures').addEventListener('click',clearMeasures);
-  $('btn-grid').addEventListener('click',()=>{if(state.grid){state.grid.visible=!state.grid.visible;status(`Rejilla ${state.grid.visible?'visible':'oculta'}.`);}else status('La rejilla solo está disponible en el modo 3D.');});
-  $('btn-cut').addEventListener('click',toggleCut);
-  window.addEventListener('resize',()=>{
-    if(state.mode==='2d')resize2D();
-    if(state.renderer&&state.camera){const c=$('canvas-3d'),w=Math.max(1,c.clientWidth),h=Math.max(1,c.clientHeight);state.camera.aspect=w/h;state.camera.updateProjectionMatrix();state.renderer.setSize(w,h);}
+  // ---------- eventos ----------
+  const onPick = e => { if (e.target.files?.length) openFiles(e.target.files); e.target.value = ''; };
+  const onDir = e => { if (e.target.files?.length) openFiles(e.target.files, { fromFolder: true }); e.target.value = ''; };
+  $('file-input').addEventListener('change', onPick); $('file-input-2').addEventListener('change', onPick);
+  $('dir-input').addEventListener('change', onDir); $('dir-input-2').addEventListener('change', onDir);
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', async e => {
+    e.preventDefault();
+    const items = [...(e.dataTransfer?.items || [])];
+    const entries = items.map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+    if (entries.some(en => en.isDirectory)) { // carpeta arrastrada
+      const files = [];
+      const walk = en => new Promise(res => {
+        if (en.isFile) en.file(f => { files.push(f); res(); }, res);
+        else { const rd = en.createReader(), all = []; const read = () => rd.readEntries(async es => { if (!es.length) { for (const x of all) await walk(x); res(); } else { all.push(...es); read(); } }, res); read(); }
+      });
+      for (const en of entries) await walk(en);
+      openFiles(files, { fromFolder: true });
+    } else if (e.dataTransfer?.files?.length) openFiles(e.dataTransfer.files);
   });
-  window.addEventListener('keydown',e=>{
-    if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;
-    if(e.key.toLowerCase()==='a')$('btn-fit').click();
-    if(e.key==='Escape'){state.measureMode=false;$('btn-measure').classList.remove('active');status('Herramienta cancelada.');}
+  $('theme-select').addEventListener('change', e => setTheme(e.target.value));
+  $('btn-fit').addEventListener('click', () => state.mode === '2d' ? fit2D() : state.mode === 'aps' ? state.aps.viewer.fitToView() : fit3D());
+  $('btn-top').addEventListener('click', () => setView('top'));
+  $('btn-front').addEventListener('click', () => setView('front'));
+  $('btn-iso').addEventListener('click', () => setView('iso'));
+  $('btn-measure').addEventListener('click', toggleMeasure);
+  $('btn-clear-measures').addEventListener('click', clearMeasures);
+  $('btn-grid').addEventListener('click', () => { if (state.grid) { state.grid.visible = !state.grid.visible; status(`Rejilla ${state.grid.visible ? 'visible' : 'oculta'}.`); } else status('La rejilla solo está disponible en el modo 3D local.'); });
+  $('btn-cut').addEventListener('click', toggleCut);
+  $('btn-aps-settings').addEventListener('click', openApsDialog);
+  $('aps-save').addEventListener('click', () => { saveApsDialog(); status('Configuración APS guardada en este navegador.'); });
+  $('aps-test').addEventListener('click', async () => {
+    saveApsDialog(); $('aps-test-out').textContent = 'Probando…';
+    try { const t = await apsCall('token'); $('aps-test-out').textContent = t.access_token ? '✔ Conexión correcta con APS' : 'Respuesta sin token'; }
+    catch (e) { $('aps-test-out').textContent = '✖ ' + e.message; }
   });
-
-  // Modo 3D de demostración explícito: no se presenta como lectura del archivo del usuario.
-  window.openDemoCube = function() {
-    const tab={id:`demo_${Date.now()}`,name:'Modelo de demostración (cubo)',ext:'demo',file:null,mode:'3d',data:null};
-    state.tabs.push(tab);state.activeId=tab.id;renderTabs();
-    $('dropzone').classList.add('hidden');$('sidebar-left').classList.remove('hidden');$('sidebar-left').classList.add('flex');
-    $('sidebar-right').classList.remove('hidden');$('sidebar-right').classList.add('flex');
-    resetView();init3D();state.mode='3d';
-    const geom=new THREE.BoxGeometry(2,2,2),mat=new THREE.MeshStandardMaterial({color:0x2563eb,roughness:.5});
-    state.object3D=new THREE.Mesh(geom,mat);state.scene.add(state.object3D);fit3D();
-    $('tree-container').textContent='Modelo de demostración: cubo';
-    showProperties({Archivo:tab.name,Formato:'Demo 3D',Unidades:'Unidades arbitrarias',Nota:'Esta geometría es una muestra, no el contenido de un archivo CAD.'});
-    status('Cubo de demostración cargado.');
-  };
+  window.addEventListener('resize', () => {
+    if (state.mode === '2d') resize2D();
+    if (state.renderer && state.camera) { const c = $('canvas-3d'), w = Math.max(1, c.clientWidth), h = Math.max(1, c.clientHeight); state.camera.aspect = w / h; state.camera.updateProjectionMatrix(); state.renderer.setSize(w, h); }
+  });
+  window.addEventListener('keydown', e => {
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) || $('aps-dialog').open) return;
+    if (e.key.toLowerCase() === 'a' && !e.ctrlKey && !e.metaKey) $('btn-fit').click();
+    if (e.key === 'Escape') { state.measureMode = false; state.measurePoints = []; $('btn-measure').classList.remove('active'); if (state.mode === '2d') draw2D(); status('Herramienta cancelada.'); }
+  });
+  try { const t = localStorage.getItem('visorcad.theme'); if (t) { $('theme-select').value = t; setTheme(t); } } catch {}
 })();
 </script>
 </body>
